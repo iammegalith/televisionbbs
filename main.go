@@ -41,6 +41,15 @@ type Config struct {
 	}
 }
 
+// FIXME
+
+type MenuConfig struct {
+	Menu struct {
+		Menu1 string
+		Menu2 string
+	}
+}
+
 const (
 	BBS_VERSION = "1Q2023.1"
 )
@@ -57,11 +66,12 @@ var (
 	configpath      string = "config/"
 )
 
+// General Command and Functions
+
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
 }
-
 
 // called by: handleDoor(conn, "modules/door.exe")
 func handleDoor(conn net.Conn, doorPath string) {
@@ -221,7 +231,7 @@ func login(conn net.Conn, db *sql.DB) bool {
 	return true
 }
 
-//FIX THIS SHIT. IT'S AWFUL AND IT DOES NOT WORK.
+// FIX THIS SHIT. IT'S AWFUL AND IT DOES NOT WORK.
 func showAnsiFile(conn net.Conn, filename string) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -276,6 +286,77 @@ func logout(conn net.Conn) {
 	conn.Close()
 }
 
+// Menu System
+
+func handleSelection(typ, args, lvl string) {
+	if lvl > userlvl {
+		fmt.Println("Sorry, you don't have permission to access this feature.")
+	} else {
+		switch typ {
+		case "function":
+			switch args {
+			case "bulletins":
+				// code to show bulletins menu
+				break
+			case "goodbye":
+				// code to log off of the BBS
+				break
+			default:
+				fmt.Println("Invalid option selected")
+			}
+			break
+		case "display":
+			switch args {
+			case "info":
+				// code to display info about the BBS
+				break
+			default:
+				fmt.Println("Invalid option selected")
+			}
+			break
+		default:
+			fmt.Println("Invalid option selected")
+		}
+	}
+}
+
+func getMenu(menuName string) {
+	// Load INI configuration file
+	var mcfg menuConfig
+	err = gcfg.ReadFileInto(&mcfg, "%s.ini", menuName)
+	if err != nil {
+		fmt.Printf("Error loading config file: %v", err)
+		return
+	}
+
+	// Get the menu options from the INI file
+	options := cfg.Sections()
+
+	// Display the menu
+	fmt.Println("Welcome to the ANSI Telnet BBS")
+	fmt.Println("Please select an option:")
+	for i, option := range options {
+		cmd := option.Key("command").String()
+		desc := option.Key("description").String()
+		fmt.Printf("%d) %s - %s\n", i+1, cmd, desc)
+	}
+
+	// Get user input for menu selection
+	var selection int
+	fmt.Scan(&selection)
+
+	// Get the selected menu option
+	selectedOption := options[selection-1]
+	cmd := selectedOption.Key("command").String()
+	desc := selectedOption.Key("description").String()
+	typ := selectedOption.Key("type").String()
+	args := selectedOption.Key("arguments").String()
+	lvl := selectedOption.Key("level").String()
+
+	handleSelection(typ, args, lvl)
+}
+
+// Handle Connection and Main functions
 func handleConnection(conn net.Conn, db *sql.DB) {
 	username = ""
 	defer conn.Close()
