@@ -39,15 +39,37 @@ type Config struct {
 		Modulepath      string
 		Datapath        string
 		Filespath       string
+		StringsFile     string
 	}
 }
 
-// FIXME
-
-type MenuConfig struct {
-	Menu struct {
-		Menu1 string
-		Menu2 string
+type BbsStrings struct {
+	general struct {
+		menuprompt         string
+		welcomestring      string
+		pressanykey        string
+		pressreturn        string
+		entername          string
+		enterpassword      string
+		enternewpassword   string
+		enterpasswordagain string
+		areyounew          string
+		areyousure         string
+		ansimode           string
+		asciimode          string
+		invalidoption      string
+		invalidname        string
+		invalidpassword    string
+		passwordmismatch   string
+		userexists         string
+		usercreated        string
+		enterchat          string
+		leavechat          string
+		pagesysop          string
+		ispagingyou        string
+		sysopishere        string
+		sysopisaway        string
+		sysopisbusy        string
 	}
 }
 
@@ -56,15 +78,46 @@ const (
 )
 
 var (
-	username        string = ""
-	port            string = "8080"
-	bbsname         string = "TelevisionBBS"
-	sysopname       string = "Sysop"
-	prelogin        bool   = true
-	bulletins       bool   = true
-	newregistration bool   = true
-	defaultlevel    int    = 0
-	configpath      string = "config/"
+	username           string = ""
+	port               string = "8080"
+	bbsname            string = "TelevisionBBS"
+	sysopname          string = "Sysop"
+	prelogin           bool   = true
+	bulletins          bool   = true
+	newregistration    bool   = true
+	defaultlevel       int    = 0
+	configpath         string = "config/"
+	stringsfile        string = "strings.config"
+	ansipath           string = "ansi/"
+	asciipath          string = "ascii/"
+	modulepath         string = "modules/"
+	datapath           string = "data/"
+	filespath          string = "files/"
+	menuprompt         string = "Please select an option:"
+	welcomestring      string = "Welcome to TelevisionBBS!"
+	pressanykey        string = "Press any key to continue..."
+	pressreturn        string = "Press return to continue..."
+	entername          string = "Please enter your name:"
+	enterpassword      string = "Please enter your password:"
+	enternewpassword   string = "Please enter a new password:"
+	enterpasswordagain string = "Please enter your password again:"
+	areyounew          string = "Are you new to TelevisionBBS? (Y/N)"
+	areyousure         string = "Are you sure? (Y/N)"
+	ansimode           string = "ANSI mode"
+	asciimode          string = "ASCII mode"
+	invalidoption      string = "Invalid option."
+	invalidname        string = "Invalid name."
+	invalidpassword    string = "Invalid password."
+	passwordmismatch   string = "Passwords do not match."
+	userexists         string = "User already exists."
+	usercreated        string = "User created."
+	enterchat          string = "Enter chat"
+	leavechat          string = "Leave chat"
+	pagesysop          string = "Page Sysop"
+	ispagingyou        string = " is paging you."
+	sysopishere        string = "Sysop is here."
+	sysopisaway        string = "Sysop is away."
+	sysopisbusy        string = "Sysop is busy."
 )
 
 // General Command and Functions
@@ -143,7 +196,7 @@ func newUser(conn net.Conn, db *sql.DB) {
 			attempts++
 			if attempts >= 3 {
 				fmt.Fprint(conn, "\r\nToo many attempts. Please try again later.\r\n")
-				logout(conn)
+				logout(conn, user)
 				return
 			}
 
@@ -281,47 +334,14 @@ func showTextFile(conn net.Conn, filePath string) {
 	}
 }
 
-func logout(conn net.Conn) {
+func logout(conn net.Conn, user User) {
 	fmt.Fprint(conn, "Goodbye!\r\n")
 	username = ""
 	conn.Close()
 }
 
 // Menu System
-
-func handleSelection(typ, args, lvl string) {
-	if lvl > userlvl {
-		fmt.Println("Sorry, you don't have permission to access this feature.")
-	} else {
-		switch typ {
-		case "function":
-			switch args {
-			case "bulletins":
-				// code to show bulletins menu
-				break
-			case "goodbye":
-				// code to log off of the BBS
-				break
-			default:
-				fmt.Println("Invalid option selected")
-			}
-			break
-		case "display":
-			switch args {
-			case "info":
-				// code to display info about the BBS
-				break
-			default:
-				fmt.Println("Invalid option selected")
-			}
-			break
-		default:
-			fmt.Println("Invalid option selected")
-		}
-	}
-}
-
-func getMenu(menuName string) {
+func getMenu(conn net.Conn, user User, menuName string) {
 	var err error
 	var mcfg *ini.File
 	mcfg, err = ini.Load(fmt.Sprintf("%s.ini", menuName))
@@ -334,7 +354,6 @@ func getMenu(menuName string) {
 	options := mcfg.Sections()
 
 	// Display the menu
-	fmt.Println("Welcome to the ANSI Telnet BBS")
 	fmt.Println("Please select an option:")
 	for i, option := range options {
 		cmd := option.Key("command").String()
@@ -352,24 +371,58 @@ func getMenu(menuName string) {
 	desc := selectedOption.Key("description").String()
 	typ := selectedOption.Key("type").String()
 	args := selectedOption.Key("arguments").String()
-	lvl := selectedOption.Key("level").String()
+	ilvl := selectedOption.Key("level").String()
+	lvl, _ := strconv.Atoi(ilvl)
 
-	handleSelection(typ, args, lvl)
+	if typ == "submenu" {
+		getMenu(conn, user, menuName)
+	} else {
+		handleSelection(conn, user, typ, args, lvl)
+	}
+}
+
+func handleSelection(conn net.Conn, user User, typ string, args string, lvl int) {
+	if lvl > user.Level {
+		fmt.Println("Sorry, you don't have permission to access this feature.")
+	} else {
+		switch typ {
+		case "function":
+			switch args {
+			case "bulletins":
+				getMenu(conn, user, "bulletins")
+				break
+			case "goodbye":
+				logout(conn, user)
+				break
+			default:
+				fmt.Println("Invalid option selected")
+			}
+			break
+		case "display":
+			switch args {
+			case "info":
+				showTextFile(conn, args)
+				break
+			default:
+				fmt.Println("Invalid option selected")
+			}
+			break
+		default:
+			fmt.Println("Invalid option selected")
+		}
+	}
 }
 
 // Handle Connection and Main functions
-func handleConnection(conn net.Conn, db *sql.DB) {
+func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	username = ""
 	defer conn.Close()
 	if login(conn, db) {
-		// Handle authenticated user
-		// Example: show main menu, handle commands, etc.
-		// This is just for testing the login
-		showTextFile(conn, "example.txt")
-		showAnsiFile(conn, "example.ans")
-		logout(conn)
+		getMenu(conn, user, "main")
+		logout(conn, user)
 		// end of testing
 	}
+	return
 }
 
 func main() {
@@ -397,6 +450,17 @@ func main() {
 	newregistration = cfg.Mainconfig.Newregistration
 	defaultlevel = cfg.Mainconfig.Defaultlevel
 	configpath = cfg.Mainconfig.Configpath
+	stringsfile = cfg.Mainconfig.StringsFile
+
+	// Get strings values
+	var bbsStrings BbsStrings
+	err = gcfg.ReadFileInto(&bbsStrings, configpath+stringsfile)
+	if err != nil {
+		fmt.Println("Failed to parse strings file:", err)
+		return
+	}
+
+	// set strings values
 
 	// start the listener
 	listener, err := net.Listen("tcp", ":"+port)
