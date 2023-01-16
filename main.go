@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/go-ini/ini"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
 
@@ -321,16 +322,16 @@ func handleSelection(typ, args, lvl string) {
 }
 
 func getMenu(menuName string) {
-	// Load INI configuration file
-	var mcfg menuConfig
-	err = gcfg.ReadFileInto(&mcfg, "%s.ini", menuName)
+	var err error
+	var mcfg *ini.File
+	mcfg, err = ini.Load(fmt.Sprintf("%s.ini", menuName))
 	if err != nil {
 		fmt.Printf("Error loading config file: %v", err)
 		return
 	}
 
 	// Get the menu options from the INI file
-	options := cfg.Sections()
+	options := mcfg.Sections()
 
 	// Display the menu
 	fmt.Println("Welcome to the ANSI Telnet BBS")
