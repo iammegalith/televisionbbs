@@ -11,3 +11,6 @@ go.sum
 .vscode
 GARBAGE
 tvbbs
+bbs.exe
+.gitignore
+bbs.db
