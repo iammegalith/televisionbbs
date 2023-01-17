@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/gdamore/tcell"
 	"github.com/go-ini/ini"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
@@ -19,10 +18,12 @@ import (
 )
 
 type User struct {
-	Id       int64
-	Username string
-	Password string
-	Level    int
+	Id          int64
+	Username    string
+	Password    string
+	Level       int
+	Linefeeds   int
+	Translation int
 }
 
 type Config struct {
@@ -119,6 +120,16 @@ var (
 	sysopishere        string = "Sysop is here."
 	sysopisaway        string = "Sysop is away."
 	sysopisbusy        string = "Sysop is busy."
+)
+
+// user data
+var (
+	user          User
+	cuid          int64
+	cuname        string
+	culevel       int
+	culinefeeds   int
+	cutranslation int
 )
 
 // General Command and Functions
@@ -224,13 +235,12 @@ func newUser(conn net.Conn, db *sql.DB) {
 
 	// You should hash the password and store the hashed password
 	hashedPassword, _ := hashPassword(password)
-	fmt.Println("INSERT INTO users(username,password,level) values('"+username+"','"+hashedPassword, 0)
-	stmt, err := db.Prepare("INSERT INTO users(username,password,level) values(?,?,?)")
+	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,translation) values(?,?,?,?,?)")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	_, err = stmt.Exec(username, hashedPassword, 0)
+	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -245,9 +255,11 @@ func login(conn net.Conn, db *sql.DB) bool {
 	reader := bufio.NewReader(conn)
 	isNewUser, _ := reader.ReadByte()
 	if isNewUser == 'y' {
+		fmt.Fprintf(conn, "\r\n")
 		newUser(conn, db)
 		return true
 	}
+	fmt.Fprintf(conn, "\r\n")
 	fmt.Fprint(conn, "Username: ")
 	var username string
 	for {
@@ -266,10 +278,17 @@ func login(conn net.Conn, db *sql.DB) bool {
 	fmt.Fprint(conn, "\r\nPassword: ")
 	password, _, _ := bufio.NewReader(conn).ReadLine()
 
-	var user User
-	err := db.QueryRow("SELECT id, username, password, level FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level)
+	err := db.QueryRow("SELECT id, username, password, level, linefeeds, translation FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level, &user.Linefeeds, &user.Translation)
+
+	cuid = user.Id
+	cuname = user.Username
+	culevel = user.Level
+	culinefeeds = user.Linefeeds
+	cutranslation = user.Translation
+
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fmt.Fprintf(conn, "\r\n")
 			fmt.Fprint(conn, "Incorrect username or password.\r\n")
 			return false
 		}
@@ -279,10 +298,13 @@ func login(conn net.Conn, db *sql.DB) bool {
 	// Compare the plain text password with the hashed password stored in the database
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 	if err != nil {
+		fmt.Fprintf(conn, "\r\n")
 		fmt.Fprint(conn, "Incorrect username or password.\r\n")
 		return false
 	}
-	fmt.Fprintf(conn, "Welcome, %s.\r\n", user.Username)
+
+	fmt.Fprintf(conn, "\r\n")
+	fmt.Fprintf(conn, "Welcome, %s.\r\n", cuname)
 	return true
 }
 
@@ -312,7 +334,7 @@ func showAnsiFile(conn net.Conn, filename string) {
 	}
 }
 
-func showTextFile(conn net.Conn, filePath string) {
+func showTextFile(conn net.Conn, filePath string, linefeeds int) {
 	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -328,7 +350,12 @@ func showTextFile(conn net.Conn, filePath string) {
 		if len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
 			line = line[:len(line)-1]
 		}
-		fmt.Fprintln(conn, line)
+		if linefeeds == 1 {
+			fmt.Println("Linefeeds: 1")
+			fmt.Fprint(conn, line+"\r\n")
+		} else {
+			fmt.Fprint(conn, line)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(conn, "Error: %v\n", err)
@@ -353,14 +380,10 @@ func getMenu(conn net.Conn, user User, menuName string) {
 
 	// Get the menu options from the INI file
 	options := mcfg.Sections()
-
+	fmt.Println("Linefeeds: ", culinefeeds)
 	// Display the menu
-	fmt.Println("Please select an option:")
-	for i, option := range options {
-		cmd := option.Key("command").String()
-		desc := option.Key("description").String()
-		fmt.Printf("%d) %s - %s\n", i+1, cmd, desc)
-	}
+	showTextFile(conn, fmt.Sprintf(asciipath+"%s.asc", menuName), culinefeeds)
+	fmt.Fprint(conn, menuprompt)
 
 	// Get user input for menu selection
 	var selection int
@@ -382,7 +405,7 @@ func getMenu(conn net.Conn, user User, menuName string) {
 
 func handleSelection(conn net.Conn, user User, typ string, args string, lvl int) {
 	if lvl > user.Level {
-		fmt.Println("Sorry, you don't have permission to access this feature.")
+		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
 	} else {
 		switch typ {
 		case "function":
@@ -393,77 +416,19 @@ func handleSelection(conn net.Conn, user User, typ string, args string, lvl int)
 				logout(conn, user)
 				break
 			default:
-				fmt.Println("Invalid option selected")
+				fmt.Fprintf(conn, "Invalid option selected")
 			}
 			break
 		case "display":
 			switch args {
 			case "info":
-				showTextFile(conn, args)
+				showTextFile(conn, args, user.Linefeeds)
 			default:
-				fmt.Println("Invalid option selected")
+				fmt.Fprintf(conn, "Invalid option selected")
 			}
 			break
 		default:
-			fmt.Println("Invalid option selected")
-		}
-	}
-}
-
-func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string) {
-	row := y1
-	col := x1
-	for _, r := range []rune(text) {
-		s.SetContent(col, row, r, nil, style)
-		col++
-		if col >= x2 {
-			row++
-			col = x1
-		}
-		if row > y2 {
-			break
-		}
-	}
-}
-
-func statusScreen(screen tcell.Screen, err error) {
-	// Clear the screen
-	screen.Clear()
-
-	// Draw the status screen
-	x, y := screen.Size()
-	header := "TeleVision BBS Version " + BBS_VERSION
-	headerX := (x / 2) - (len(header) / 2)
-	drawText(screen, headerX, 0, x, y, tcell.StyleDefault.Foreground(tcell.ColorGreen).Background(tcell.ColorBlack), header)
-
-	// Draw the status information
-	// Example: number of users online, number of messages, etc.
-	usersOnline := "Users online: 12"
-	numMessages := "Messages: 42"
-	drawText(screen, headerX, 1, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), usersOnline)
-	drawText(screen, headerX, 2, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), numMessages)
-	// Draw the footer
-	footer := "Press 'q' to quit"
-	footerX := (x / 2) - (len(footer) / 2)
-	drawText(screen, footerX, y-1, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), footer)
-
-	// Show the screen
-	screen.Show()
-
-	// Wait for user input
-	for {
-		ev := screen.PollEvent()
-		switch ev := ev.(type) {
-		case *tcell.EventKey:
-			switch ev.Key() {
-			case tcell.KeyRune:
-				if ev.Rune() == 'q' {
-					screen.Fini()
-					return
-				}
-			}
-		case *tcell.EventResize:
-			screen.Sync()
+			fmt.Fprintf(conn, "Invalid option selected")
 		}
 	}
 }
@@ -473,6 +438,7 @@ func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	username = ""
 	defer conn.Close()
 	if login(conn, db) {
+		fmt.Println("User Info: ", "ID:", cuid, "Username:", cuname, "Level:", culevel, "Linefeeds:", culinefeeds, "Translation:", cutranslation)
 		getMenu(conn, user, "main")
 		logout(conn, user)
 		// end of testing
@@ -574,8 +540,6 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
-		screen, err := tcell.NewScreen()
-		go statusScreen(screen, err)
 		go handleConnection(conn, db)
 	}
 }
