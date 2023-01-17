@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/gdamore/tcell"
 	"github.com/go-ini/ini"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
@@ -44,32 +45,32 @@ type Config struct {
 }
 
 type BbsStrings struct {
-	general struct {
-		menuprompt         string
-		welcomestring      string
-		pressanykey        string
-		pressreturn        string
-		entername          string
-		enterpassword      string
-		enternewpassword   string
-		enterpasswordagain string
-		areyounew          string
-		areyousure         string
-		ansimode           string
-		asciimode          string
-		invalidoption      string
-		invalidname        string
-		invalidpassword    string
-		passwordmismatch   string
-		userexists         string
-		usercreated        string
-		enterchat          string
-		leavechat          string
-		pagesysop          string
-		ispagingyou        string
-		sysopishere        string
-		sysopisaway        string
-		sysopisbusy        string
+	General struct {
+		Menuprompt         string
+		Welcomestring      string
+		Pressanykey        string
+		Pressreturn        string
+		Entername          string
+		Enterpassword      string
+		Enternewpassword   string
+		Enterpasswordagain string
+		Areyounew          string
+		Areyousure         string
+		Ansimode           string
+		Asciimode          string
+		Invalidoption      string
+		Invalidname        string
+		Invalidpassword    string
+		Passwordmismatch   string
+		Userexists         string
+		Usercreated        string
+		Enterchat          string
+		Leavechat          string
+		Pagesysop          string
+		Ispagingyou        string
+		Sysopishere        string
+		Sysopisaway        string
+		Sysopisbusy        string
 	}
 }
 
@@ -367,8 +368,6 @@ func getMenu(conn net.Conn, user User, menuName string) {
 
 	// Get the selected menu option
 	selectedOption := options[selection-1]
-	cmd := selectedOption.Key("command").String()
-	desc := selectedOption.Key("description").String()
 	typ := selectedOption.Key("type").String()
 	args := selectedOption.Key("arguments").String()
 	ilvl := selectedOption.Key("level").String()
@@ -390,7 +389,6 @@ func handleSelection(conn net.Conn, user User, typ string, args string, lvl int)
 			switch args {
 			case "bulletins":
 				getMenu(conn, user, "bulletins")
-				break
 			case "goodbye":
 				logout(conn, user)
 				break
@@ -402,13 +400,70 @@ func handleSelection(conn net.Conn, user User, typ string, args string, lvl int)
 			switch args {
 			case "info":
 				showTextFile(conn, args)
-				break
 			default:
 				fmt.Println("Invalid option selected")
 			}
 			break
 		default:
 			fmt.Println("Invalid option selected")
+		}
+	}
+}
+
+func drawText(s tcell.Screen, x1, y1, x2, y2 int, style tcell.Style, text string) {
+	row := y1
+	col := x1
+	for _, r := range []rune(text) {
+		s.SetContent(col, row, r, nil, style)
+		col++
+		if col >= x2 {
+			row++
+			col = x1
+		}
+		if row > y2 {
+			break
+		}
+	}
+}
+
+func statusScreen(screen tcell.Screen, err error) {
+	// Clear the screen
+	screen.Clear()
+
+	// Draw the status screen
+	x, y := screen.Size()
+	header := "TeleVision BBS Version " + BBS_VERSION
+	headerX := (x / 2) - (len(header) / 2)
+	drawText(screen, headerX, 0, x, y, tcell.StyleDefault.Foreground(tcell.ColorGreen).Background(tcell.ColorBlack), header)
+
+	// Draw the status information
+	// Example: number of users online, number of messages, etc.
+	usersOnline := "Users online: 12"
+	numMessages := "Messages: 42"
+	drawText(screen, headerX, 1, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), usersOnline)
+	drawText(screen, headerX, 2, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), numMessages)
+	// Draw the footer
+	footer := "Press 'q' to quit"
+	footerX := (x / 2) - (len(footer) / 2)
+	drawText(screen, footerX, y-1, x, y, tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), footer)
+
+	// Show the screen
+	screen.Show()
+
+	// Wait for user input
+	for {
+		ev := screen.PollEvent()
+		switch ev := ev.(type) {
+		case *tcell.EventKey:
+			switch ev.Key() {
+			case tcell.KeyRune:
+				if ev.Rune() == 'q' {
+					screen.Fini()
+					return
+				}
+			}
+		case *tcell.EventResize:
+			screen.Sync()
 		}
 	}
 }
@@ -461,6 +516,31 @@ func main() {
 	}
 
 	// set strings values
+	menuprompt = bbsStrings.General.Menuprompt
+	welcomestring = bbsStrings.General.Welcomestring
+	pressanykey = bbsStrings.General.Pressanykey
+	pressreturn = bbsStrings.General.Pressreturn
+	entername = bbsStrings.General.Entername
+	enterpassword = bbsStrings.General.Enterpassword
+	enternewpassword = bbsStrings.General.Enternewpassword
+	enterpasswordagain = bbsStrings.General.Enterpasswordagain
+	areyounew = bbsStrings.General.Areyounew
+	areyousure = bbsStrings.General.Areyousure
+	ansimode = bbsStrings.General.Ansimode
+	asciimode = bbsStrings.General.Asciimode
+	invalidoption = bbsStrings.General.Invalidoption
+	invalidname = bbsStrings.General.Invalidname
+	invalidpassword = bbsStrings.General.Invalidpassword
+	passwordmismatch = bbsStrings.General.Passwordmismatch
+	userexists = bbsStrings.General.Userexists
+	usercreated = bbsStrings.General.Usercreated
+	enterchat = bbsStrings.General.Enterchat
+	leavechat = bbsStrings.General.Leavechat
+	pagesysop = bbsStrings.General.Pagesysop
+	ispagingyou = bbsStrings.General.Ispagingyou
+	sysopishere = bbsStrings.General.Sysopishere
+	sysopisaway = bbsStrings.General.Sysopisaway
+	sysopisbusy = bbsStrings.General.Sysopisbusy
 
 	// start the listener
 	listener, err := net.Listen("tcp", ":"+port)
@@ -494,6 +574,8 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
+		screen, err := tcell.NewScreen()
+		go statusScreen(screen, err)
 		go handleConnection(conn, db)
 	}
 }
