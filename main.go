@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 
+	"github.com/go-ini/ini"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
 
@@ -17,10 +18,12 @@ import (
 )
 
 type User struct {
-	Id       int64
-	Username string
-	Password string
-	Level    int
+	Id          int64
+	Username    string
+	Password    string
+	Level       int
+	Linefeeds   int
+	Translation int
 }
 
 type Config struct {
@@ -38,6 +41,37 @@ type Config struct {
 		Modulepath      string
 		Datapath        string
 		Filespath       string
+		StringsFile     string
+	}
+}
+
+type BbsStrings struct {
+	General struct {
+		Menuprompt         string
+		Welcomestring      string
+		Pressanykey        string
+		Pressreturn        string
+		Entername          string
+		Enterpassword      string
+		Enternewpassword   string
+		Enterpasswordagain string
+		Areyounew          string
+		Areyousure         string
+		Ansimode           string
+		Asciimode          string
+		Invalidoption      string
+		Invalidname        string
+		Invalidpassword    string
+		Passwordmismatch   string
+		Userexists         string
+		Usercreated        string
+		Enterchat          string
+		Leavechat          string
+		Pagesysop          string
+		Ispagingyou        string
+		Sysopishere        string
+		Sysopisaway        string
+		Sysopisbusy        string
 	}
 }
 
@@ -46,22 +80,64 @@ const (
 )
 
 var (
-	username        string = ""
-	port            string = "8080"
-	bbsname         string = "TelevisionBBS"
-	sysopname       string = "Sysop"
-	prelogin        bool   = true
-	bulletins       bool   = true
-	newregistration bool   = true
-	defaultlevel    int    = 0
-	configpath      string = "config/"
+	username           string = ""
+	port               string = "8080"
+	bbsname            string = "TelevisionBBS"
+	sysopname          string = "Sysop"
+	prelogin           bool   = true
+	bulletins          bool   = true
+	newregistration    bool   = true
+	defaultlevel       int    = 0
+	configpath         string = "config/"
+	stringsfile        string = "strings.config"
+	ansipath           string = "ansi/"
+	asciipath          string = "ascii/"
+	modulepath         string = "modules/"
+	datapath           string = "data/"
+	filespath          string = "files/"
+	menuprompt         string = "Please select an option:"
+	welcomestring      string = "Welcome to TelevisionBBS!"
+	pressanykey        string = "Press any key to continue..."
+	pressreturn        string = "Press return to continue..."
+	entername          string = "Please enter your name:"
+	enterpassword      string = "Please enter your password:"
+	enternewpassword   string = "Please enter a new password:"
+	enterpasswordagain string = "Please enter your password again:"
+	areyounew          string = "Are you new to TelevisionBBS? (Y/N)"
+	areyousure         string = "Are you sure? (Y/N)"
+	ansimode           string = "ANSI mode"
+	asciimode          string = "ASCII mode"
+	invalidoption      string = "Invalid option."
+	invalidname        string = "Invalid name."
+	invalidpassword    string = "Invalid password."
+	passwordmismatch   string = "Passwords do not match."
+	userexists         string = "User already exists."
+	usercreated        string = "User created."
+	enterchat          string = "Enter chat"
+	leavechat          string = "Leave chat"
+	pagesysop          string = "Page Sysop"
+	ispagingyou        string = " is paging you."
+	sysopishere        string = "Sysop is here."
+	sysopisaway        string = "Sysop is away."
+	sysopisbusy        string = "Sysop is busy."
 )
+
+// user data
+var (
+	user          User
+	cuid          int64
+	cuname        string
+	culevel       int
+	culinefeeds   int
+	cutranslation int
+)
+
+// General Command and Functions
 
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	return string(bytes), err
 }
-
 
 // called by: handleDoor(conn, "modules/door.exe")
 func handleDoor(conn net.Conn, doorPath string) {
@@ -132,7 +208,7 @@ func newUser(conn net.Conn, db *sql.DB) {
 			attempts++
 			if attempts >= 3 {
 				fmt.Fprint(conn, "\r\nToo many attempts. Please try again later.\r\n")
-				logout(conn)
+				logout(conn, user)
 				return
 			}
 
@@ -159,13 +235,12 @@ func newUser(conn net.Conn, db *sql.DB) {
 
 	// You should hash the password and store the hashed password
 	hashedPassword, _ := hashPassword(password)
-	fmt.Println("INSERT INTO users(username,password,level) values('"+username+"','"+hashedPassword, 0)
-	stmt, err := db.Prepare("INSERT INTO users(username,password,level) values(?,?,?)")
+	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,translation) values(?,?,?,?,?)")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	_, err = stmt.Exec(username, hashedPassword, 0)
+	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -180,9 +255,11 @@ func login(conn net.Conn, db *sql.DB) bool {
 	reader := bufio.NewReader(conn)
 	isNewUser, _ := reader.ReadByte()
 	if isNewUser == 'y' {
+		fmt.Fprintf(conn, "\r\n")
 		newUser(conn, db)
 		return true
 	}
+	fmt.Fprintf(conn, "\r\n")
 	fmt.Fprint(conn, "Username: ")
 	var username string
 	for {
@@ -201,10 +278,17 @@ func login(conn net.Conn, db *sql.DB) bool {
 	fmt.Fprint(conn, "\r\nPassword: ")
 	password, _, _ := bufio.NewReader(conn).ReadLine()
 
-	var user User
-	err := db.QueryRow("SELECT id, username, password, level FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level)
+	err := db.QueryRow("SELECT id, username, password, level, linefeeds, translation FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level, &user.Linefeeds, &user.Translation)
+
+	cuid = user.Id
+	cuname = user.Username
+	culevel = user.Level
+	culinefeeds = user.Linefeeds
+	cutranslation = user.Translation
+
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fmt.Fprintf(conn, "\r\n")
 			fmt.Fprint(conn, "Incorrect username or password.\r\n")
 			return false
 		}
@@ -214,14 +298,17 @@ func login(conn net.Conn, db *sql.DB) bool {
 	// Compare the plain text password with the hashed password stored in the database
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 	if err != nil {
+		fmt.Fprintf(conn, "\r\n")
 		fmt.Fprint(conn, "Incorrect username or password.\r\n")
 		return false
 	}
-	fmt.Fprintf(conn, "Welcome, %s.\r\n", user.Username)
+
+	fmt.Fprintf(conn, "\r\n")
+	fmt.Fprintf(conn, "Welcome, %s.\r\n", cuname)
 	return true
 }
 
-//FIX THIS SHIT. IT'S AWFUL AND IT DOES NOT WORK.
+// FIX THIS SHIT. IT'S AWFUL AND IT DOES NOT WORK.
 func showAnsiFile(conn net.Conn, filename string) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -247,7 +334,7 @@ func showAnsiFile(conn net.Conn, filename string) {
 	}
 }
 
-func showTextFile(conn net.Conn, filePath string) {
+func showTextFile(conn net.Conn, filePath string, linefeeds int) {
 	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -263,31 +350,100 @@ func showTextFile(conn net.Conn, filePath string) {
 		if len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
 			line = line[:len(line)-1]
 		}
-		fmt.Fprintln(conn, line)
+		if linefeeds == 1 {
+			fmt.Println("Linefeeds: 1")
+			fmt.Fprint(conn, line+"\r\n")
+		} else {
+			fmt.Fprint(conn, line)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(conn, "Error: %v\n", err)
 	}
 }
 
-func logout(conn net.Conn) {
+func logout(conn net.Conn, user User) {
 	fmt.Fprint(conn, "Goodbye!\r\n")
 	username = ""
 	conn.Close()
 }
 
-func handleConnection(conn net.Conn, db *sql.DB) {
+// Menu System
+func getMenu(conn net.Conn, user User, menuName string) {
+	var err error
+	var mcfg *ini.File
+	mcfg, err = ini.Load(fmt.Sprintf(configpath+"%s.config", menuName))
+	if err != nil {
+		fmt.Printf("Error loading config file: %v", err)
+		return
+	}
+
+	// Get the menu options from the INI file
+	options := mcfg.Sections()
+	fmt.Println("Linefeeds: ", culinefeeds)
+	// Display the menu
+	showTextFile(conn, fmt.Sprintf(asciipath+"%s.asc", menuName), culinefeeds)
+	fmt.Fprint(conn, menuprompt)
+
+	// Get user input for menu selection
+	var selection int
+	fmt.Scan(&selection)
+
+	// Get the selected menu option
+	selectedOption := options[selection-1]
+	typ := selectedOption.Key("type").String()
+	args := selectedOption.Key("arguments").String()
+	ilvl := selectedOption.Key("level").String()
+	lvl, _ := strconv.Atoi(ilvl)
+
+	if typ == "submenu" {
+		getMenu(conn, user, menuName)
+	} else {
+		handleSelection(conn, user, typ, args, lvl)
+	}
+}
+
+func handleSelection(conn net.Conn, user User, typ string, args string, lvl int) {
+	if lvl > user.Level {
+		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
+	} else {
+		switch typ {
+		case "function":
+			switch args {
+			case "bulletins":
+				getMenu(conn, user, "bulletins")
+			case "goodbye":
+				logout(conn, user)
+				break
+			default:
+				fmt.Fprintf(conn, "Invalid option selected")
+			}
+			break
+		case "display":
+			switch args {
+			case "info":
+				showTextFile(conn, args, user.Linefeeds)
+			default:
+				fmt.Fprintf(conn, "Invalid option selected")
+			}
+			break
+		default:
+			fmt.Fprintf(conn, "Invalid option selected")
+		}
+	}
+}
+
+// Handle Connection and Main functions
+func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	username = ""
 	defer conn.Close()
 	if login(conn, db) {
-		// Handle authenticated user
-		// Example: show main menu, handle commands, etc.
-		// This is just for testing the login
-		showTextFile(conn, "example.txt")
-		showAnsiFile(conn, "example.ans")
-		logout(conn)
+		fmt.Println("User Info: ", "ID:", cuid, "Username:", cuname, "Level:", culevel, "Linefeeds:", culinefeeds, "Translation:", cutranslation)
+		getMenu(conn, user, "main")
+		logout(conn, user)
 		// end of testing
 	}
+	return
 }
 
 func main() {
@@ -315,6 +471,42 @@ func main() {
 	newregistration = cfg.Mainconfig.Newregistration
 	defaultlevel = cfg.Mainconfig.Defaultlevel
 	configpath = cfg.Mainconfig.Configpath
+	stringsfile = cfg.Mainconfig.StringsFile
+
+	// Get strings values
+	var bbsStrings BbsStrings
+	err = gcfg.ReadFileInto(&bbsStrings, configpath+stringsfile)
+	if err != nil {
+		fmt.Println("Failed to parse strings file:", err)
+		return
+	}
+
+	// set strings values
+	menuprompt = bbsStrings.General.Menuprompt
+	welcomestring = bbsStrings.General.Welcomestring
+	pressanykey = bbsStrings.General.Pressanykey
+	pressreturn = bbsStrings.General.Pressreturn
+	entername = bbsStrings.General.Entername
+	enterpassword = bbsStrings.General.Enterpassword
+	enternewpassword = bbsStrings.General.Enternewpassword
+	enterpasswordagain = bbsStrings.General.Enterpasswordagain
+	areyounew = bbsStrings.General.Areyounew
+	areyousure = bbsStrings.General.Areyousure
+	ansimode = bbsStrings.General.Ansimode
+	asciimode = bbsStrings.General.Asciimode
+	invalidoption = bbsStrings.General.Invalidoption
+	invalidname = bbsStrings.General.Invalidname
+	invalidpassword = bbsStrings.General.Invalidpassword
+	passwordmismatch = bbsStrings.General.Passwordmismatch
+	userexists = bbsStrings.General.Userexists
+	usercreated = bbsStrings.General.Usercreated
+	enterchat = bbsStrings.General.Enterchat
+	leavechat = bbsStrings.General.Leavechat
+	pagesysop = bbsStrings.General.Pagesysop
+	ispagingyou = bbsStrings.General.Ispagingyou
+	sysopishere = bbsStrings.General.Sysopishere
+	sysopisaway = bbsStrings.General.Sysopisaway
+	sysopisbusy = bbsStrings.General.Sysopisbusy
 
 	// start the listener
 	listener, err := net.Listen("tcp", ":"+port)
