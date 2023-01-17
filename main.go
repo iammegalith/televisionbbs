@@ -345,7 +345,7 @@ func logout(conn net.Conn, user User) {
 func getMenu(conn net.Conn, user User, menuName string) {
 	var err error
 	var mcfg *ini.File
-	mcfg, err = ini.Load(fmt.Sprintf("%s.config", menuName))
+	mcfg, err = ini.Load(fmt.Sprintf(configpath+"%s.config", menuName))
 	if err != nil {
 		fmt.Printf("Error loading config file: %v", err)
 		return
