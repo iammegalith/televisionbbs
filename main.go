@@ -424,6 +424,25 @@ func pressKey(conn net.Conn) error {
 	return nil
 }
 
+func askYesNo(conn net.Conn, question string) (bool, error) {
+	var response string
+	fmt.Fprint(conn, question+" (y/n): ")
+	scanner := bufio.NewScanner(conn)
+	if scanner.Scan() {
+		response = scanner.Text()
+	} else {
+		return false, scanner.Err()
+	}
+	response = strings.ToLower(response)
+	if response == "y" || response == "yes" {
+		return true, nil
+	} else if response == "n" || response == "no" {
+		return false, nil
+	} else {
+		return false, fmt.Errorf("Invalid response. Please enter 'y' or 'n'.")
+	}
+}
+
 func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
 	if lvl > user.Level {
 		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
@@ -433,6 +452,17 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 			showTextFile(conn, asciipath+args+".asc", user.Linefeeds)
 			pressKey(conn)
 			getMenu(conn, user, currentMenu)
+		case "goodbye":
+			result, err := askYesNo(conn, "Are you sure you want to log out?")
+			if err != nil {
+				fmt.Fprintf(conn, "Error: %v", err)
+				return
+			}
+			if result {
+				logout(conn, user)
+			} else {
+				getMenu(conn, user, currentMenu)
+			}
 		case "teleconference":
 			// code to handle teleconference feature
 		case "userlist":
