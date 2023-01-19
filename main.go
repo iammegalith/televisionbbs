@@ -171,19 +171,21 @@ func hashPassword(password string) (string, error) {
 	return string(bytes), err
 }
 
-// called by: handleDoor(conn, "modules/door.exe")
-func handleDoor(conn net.Conn, doorPath string) {
+// called by: handleDoor(conn, "modules/door.exe", done)
+func handleDoor(conn net.Conn, doorPath string, done chan bool) {
 	cmd := exec.Command(doorPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	defer stdin.Close() // close stdin pipe when function exits
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	defer stdout.Close() // close stdout pipe when function exits
 	if err := cmd.Start(); err != nil {
 		fmt.Println(err)
 		return
@@ -213,6 +215,7 @@ func handleDoor(conn net.Conn, doorPath string) {
 	if err := cmd.Wait(); err != nil {
 		fmt.Println(err)
 	}
+	done <- true
 }
 
 func newUser(conn net.Conn, db *sql.DB) {
@@ -451,6 +454,11 @@ func getMenu(conn net.Conn, user User, menuName string) {
 	if typ == "menu" {
 		prevmenu = currentMenu
 		getMenu(conn, user, args)
+	} else if typ == "door" {
+		done := make(chan bool)
+		handleDoor(conn, "./"+args, done)
+		<-done
+		return
 	} else {
 		handleSelection(conn, user, args, lvl, currentMenu)
 	}
