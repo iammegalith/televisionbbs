@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/go-ini/ini"
 	"golang.org/x/crypto/bcrypt"
@@ -370,6 +371,7 @@ func logout(conn net.Conn, user User) {
 
 // Menu System
 func getMenu(conn net.Conn, user User, menuName string) {
+	var currentMenu string = menuName
 	var err error
 	var mcfg *ini.File
 	mcfg, err = ini.Load(fmt.Sprintf(configpath+"%s.config", menuName))
@@ -380,55 +382,75 @@ func getMenu(conn net.Conn, user User, menuName string) {
 
 	// Get the menu options from the INI file
 	options := mcfg.Sections()
-	fmt.Println("Linefeeds: ", culinefeeds)
+
 	// Display the menu
 	showTextFile(conn, fmt.Sprintf(asciipath+"%s.asc", menuName), culinefeeds)
 	fmt.Fprint(conn, menuprompt)
 
 	// Get user input for menu selection
-	var selection int
-	fmt.Scan(&selection)
+	user_input, _ := bufio.NewReader(conn).ReadString('\n')
+	user_input = strings.TrimSpace(user_input)
 
 	// Get the selected menu option
-	selectedOption := options[selection-1]
-	typ := selectedOption.Key("type").String()
-	args := selectedOption.Key("arguments").String()
-	ilvl := selectedOption.Key("level").String()
-	lvl, _ := strconv.Atoi(ilvl)
+	var selection *ini.Section
+	for _, option := range options {
+		if option.Key("fast").String() == user_input {
+			selection = option
+			break
+		}
+	}
 
-	if typ == "submenu" {
-		getMenu(conn, user, menuName)
+	if selection == nil {
+		fmt.Fprint(conn, "Invalid selection")
+		return
+	}
+
+	typ := selection.Key("type").String()
+	args := selection.Key("arguments").String()
+	lvl := selection.Key("level").MustInt(0)
+
+	if typ == "menu" {
+		getMenu(conn, user, args)
 	} else {
-		handleSelection(conn, user, typ, args, lvl)
+		handleSelection(conn, user, args, lvl, currentMenu)
 	}
 }
 
-func handleSelection(conn net.Conn, user User, typ string, args string, lvl int) {
+func pressKey(conn net.Conn) error {
+	fmt.Fprint(conn, "--- Press any key to continue ---")
+	// Wait for the user to press a key
+	scanner := bufio.NewScanner(conn)
+	scanner.Scan()
+	return nil
+}
+
+func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
 	if lvl > user.Level {
 		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
 	} else {
-		switch typ {
-		case "function":
-			switch args {
-			case "bulletins":
-				getMenu(conn, user, "bulletins")
-			case "goodbye":
-				logout(conn, user)
-				break
-			default:
-				fmt.Fprintf(conn, "Invalid option selected")
-			}
-			break
-		case "display":
-			switch args {
-			case "info":
-				showTextFile(conn, args, user.Linefeeds)
-			default:
-				fmt.Fprintf(conn, "Invalid option selected")
-			}
-			break
+		switch args {
+		case "info":
+			showTextFile(conn, asciipath+args+".asc", user.Linefeeds)
+			pressKey(conn)
+			getMenu(conn, user, currentMenu)
+		case "teleconference":
+			// code to handle teleconference feature
+		case "userlist":
+			// code to handle userlist feature
+		case "obbs":
+			// code to handle obbs feature
+		case "whosonline":
+			// code to handle whosonline feature
+		case "pagesysop":
+			// code to handle pagesysop feature
+		case "userconfig":
+			// code to handle userconfig feature
+		case "sysop":
+			// code to handle sysop feature
 		default:
 			fmt.Fprintf(conn, "Invalid option selected")
+			pressKey(conn)
+			getMenu(conn, user, currentMenu)
 		}
 	}
 }
