@@ -12,10 +12,10 @@ import (
 	"strings"
 
 	"github.com/go-ini/ini"
+	"github.com/k0kubun/go-ansi"
+	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type User struct {
@@ -25,6 +25,8 @@ type User struct {
 	Level       int
 	Linefeeds   int
 	Translation int
+	Active      bool
+	Clearscreen bool
 }
 
 type Config struct {
@@ -81,6 +83,7 @@ const (
 )
 
 var (
+	prevmenu           string = ""
 	username           string = ""
 	port               string = "8080"
 	bbsname            string = "TelevisionBBS"
@@ -131,9 +134,37 @@ var (
 	culevel       int
 	culinefeeds   int
 	cutranslation int
+	cuactive      bool
+	cuclearscreen bool
 )
 
 // General Command and Functions
+
+func alreadyLoggedIn(conn net.Conn, username string, db *sql.DB) bool {
+	var sessionExists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions WHERE username = ? and active = 1)", username).Scan(&sessionExists)
+	if err != nil {
+		fmt.Println(err)
+		return false
+	}
+	if sessionExists {
+		reader := bufio.NewReader(conn)
+		fmt.Fprint(conn, "\r\nYou are already logged in. Would you like to end your previous session? (y/n): ")
+		endSession, _ := reader.ReadByte()
+		if endSession == 'y' {
+			// end previous session
+			_, err := db.Exec("UPDATE sessions SET active = 0 WHERE username = ?", username)
+			if err != nil {
+				fmt.Println(err)
+				return false
+			}
+			return false
+		} else {
+			return true
+		}
+	}
+	return false
+}
 
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
@@ -236,12 +267,12 @@ func newUser(conn net.Conn, db *sql.DB) {
 
 	// You should hash the password and store the hashed password
 	hashedPassword, _ := hashPassword(password)
-	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,translation) values(?,?,?,?,?)")
+	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,translation, active, clearscreen) values(?,?,?,?,?,?,?)")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0)
+	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0, 1, 0)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -251,8 +282,7 @@ func newUser(conn net.Conn, db *sql.DB) {
 }
 
 func login(conn net.Conn, db *sql.DB) bool {
-	fmt.Fprint(conn, "\033[2J\033[1;1H") // Clear screen
-	fmt.Fprint(conn, "Welcome to the BBS. Are you a new user? (y/n): ")
+	fmt.Fprint(conn, "\r\nWelcome to the BBS. Are you a new user? (y/n): ")
 	reader := bufio.NewReader(conn)
 	isNewUser, _ := reader.ReadByte()
 	if isNewUser == 'y' {
@@ -265,27 +295,31 @@ func login(conn net.Conn, db *sql.DB) bool {
 	var username string
 	for {
 		char, err := reader.ReadByte()
+		fmt.Fprint(conn, string(char))
 		if err != nil {
 			break
 		}
 		if char == '\r' || char == '\n' {
-
 			break
 		}
-		fmt.Fprint(conn, string(char))
 		username += string(char)
 	}
-
+	username = strings.TrimSpace(username)
+	if username == "" {
+		fmt.Fprintln(conn, "\r\nUsername cannot be blank.")
+		return login(conn, db)
+	}
 	fmt.Fprint(conn, "\r\nPassword: ")
 	password, _, _ := bufio.NewReader(conn).ReadLine()
-
-	err := db.QueryRow("SELECT id, username, password, level, linefeeds, translation FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level, &user.Linefeeds, &user.Translation)
+	err := db.QueryRow("SELECT id, username, password, level, linefeeds, translation, active, clearscreen FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level, &user.Linefeeds, &user.Translation, &user.Active, &user.Clearscreen)
 
 	cuid = user.Id
 	cuname = user.Username
 	culevel = user.Level
 	culinefeeds = user.Linefeeds
 	cutranslation = user.Translation
+	cuactive = user.Active
+	cuclearscreen = user.Clearscreen
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -303,13 +337,15 @@ func login(conn net.Conn, db *sql.DB) bool {
 		fmt.Fprint(conn, "Incorrect username or password.\r\n")
 		return false
 	}
-
+	if alreadyLoggedIn(conn, username, db) {
+		fmt.Fprint(conn, "\r\nThis account is already logged in. Please try again later.\r\n")
+		return false
+	}
 	fmt.Fprintf(conn, "\r\n")
 	fmt.Fprintf(conn, "Welcome, %s.\r\n", cuname)
 	return true
 }
 
-// FIX THIS SHIT. IT'S AWFUL AND IT DOES NOT WORK.
 func showAnsiFile(conn net.Conn, filename string) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -328,11 +364,13 @@ func showAnsiFile(conn net.Conn, filename string) {
 	// remove BOM from file
 	content := bytes.TrimPrefix(buf.Bytes(), []byte("\xef\xbb\xbf"))
 
-	// copy file contents to conn
-	_, err = conn.Write(content)
+	// Interpret ANSI codes
+	ansiContent, err := ansi.Printf(string(content))
 	if err != nil {
-		fmt.Fprintf(conn, "Error sending file: %s", err)
+		fmt.Fprintf(conn, "Error interpreting ANSI codes: %s", err)
+		return
 	}
+	fmt.Fprint(conn, ansiContent)
 }
 
 func showTextFile(conn net.Conn, filePath string, linefeeds int) {
@@ -401,7 +439,8 @@ func getMenu(conn net.Conn, user User, menuName string) {
 	}
 
 	if selection == nil {
-		fmt.Fprint(conn, "Invalid selection")
+		fmt.Fprint(conn, "\r\nInvalid selection")
+		getMenu(conn, user, currentMenu)
 		return
 	}
 
@@ -410,18 +449,47 @@ func getMenu(conn net.Conn, user User, menuName string) {
 	lvl := selection.Key("level").MustInt(0)
 
 	if typ == "menu" {
+		prevmenu = currentMenu
 		getMenu(conn, user, args)
 	} else {
 		handleSelection(conn, user, args, lvl, currentMenu)
 	}
 }
 
-func pressKey(conn net.Conn) error {
-	fmt.Fprint(conn, "--- Press any key to continue ---")
-	// Wait for the user to press a key
+func pressReturn(conn net.Conn) error {
+	fmt.Fprint(conn, "\r\n--- Press [ RETURN ]] ---")
+	// Wait for the user to press RETURN
 	scanner := bufio.NewScanner(conn)
 	scanner.Scan()
 	return nil
+}
+
+func pressKey(conn net.Conn) error {
+	fmt.Fprint(conn, "\r\n--- Press any key ---")
+	_, err := conn.Read(make([]byte, 1))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func askYesNo(conn net.Conn, question string) (bool, error) {
+	var response string
+	fmt.Fprint(conn, question+" (y/n): ")
+	scanner := bufio.NewScanner(conn)
+	if scanner.Scan() {
+		response = scanner.Text()
+	} else {
+		return false, scanner.Err()
+	}
+	response = strings.ToLower(response)
+	if response == "y" || response == "yes" {
+		return true, nil
+	} else if response == "n" || response == "no" {
+		return false, nil
+	} else {
+		return false, fmt.Errorf("\r\nInvalid response. Please enter 'y' or 'n'.")
+	}
 }
 
 func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
@@ -430,9 +498,22 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 	} else {
 		switch args {
 		case "info":
-			showTextFile(conn, asciipath+args+".asc", user.Linefeeds)
+			showTextFile(conn, asciipath+args+".asc", culinefeeds)
 			pressKey(conn)
 			getMenu(conn, user, currentMenu)
+		case "goodbye":
+			result, err := askYesNo(conn, "Are you sure you want to log out?")
+			if err != nil {
+				fmt.Fprintf(conn, "Error: %v", err)
+				return
+			}
+			if result {
+				logout(conn, user)
+			} else {
+				getMenu(conn, user, currentMenu)
+			}
+		case "bye":
+			logout(conn, user)
 		case "teleconference":
 			// code to handle teleconference feature
 		case "userlist":
@@ -448,9 +529,15 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 		case "sysop":
 			// code to handle sysop feature
 		default:
-			fmt.Fprintf(conn, "Invalid option selected")
-			pressKey(conn)
-			getMenu(conn, user, currentMenu)
+			if args == "" {
+				getMenu(conn, user, currentMenu)
+				return
+			} else {
+				fmt.Fprintf(conn, "\r\nInvalid option selected")
+				pressKey(conn)
+				getMenu(conn, user, currentMenu)
+				return
+			}
 		}
 	}
 }
@@ -460,7 +547,6 @@ func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	username = ""
 	defer conn.Close()
 	if login(conn, db) {
-		fmt.Println("User Info: ", "ID:", cuid, "Username:", cuname, "Level:", culevel, "Linefeeds:", culinefeeds, "Translation:", cutranslation)
 		getMenu(conn, user, "main")
 		logout(conn, user)
 		// end of testing
