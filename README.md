@@ -1,6 +1,17 @@
 # televisionbbs
 This is the home of TeleVision Bulletin Board System.
 
+building this thing:
+
+```
+go mod init
+go mod tidy
+go build -o bbs main.go
+go build -o hello externals/hello/main
+go build -o guess externals/guess/main.go
+```
+then just run bbs and telnet to it on port 8080
+
 ## As of Jan 19 2023: INCOMPLETE 
 This is incomplete - it kind of works, but there are a lot of fixes required.
 
