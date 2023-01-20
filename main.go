@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
+
+	"televisionbbs/chatroom"
 
 	"github.com/go-ini/ini"
 	"github.com/k0kubun/go-ansi"
@@ -171,52 +172,7 @@ func hashPassword(password string) (string, error) {
 	return string(bytes), err
 }
 
-// called by: handleDoor(conn, "modules/door.exe", done)
-func handleDoor(conn net.Conn, doorPath string, done chan bool) {
-	cmd := exec.Command(doorPath)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer stdin.Close() // close stdin pipe when function exits
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer stdout.Close() // close stdout pipe when function exits
-	if err := cmd.Start(); err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// Communicate with the "door" game
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := stdout.Read(buf)
-			if err != nil {
-				break
-			}
-			conn.Write(buf[:n])
-		}
-	}()
-
-	buf := make([]byte, 4096)
-	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			break
-		}
-		stdin.Write(buf[:n])
-	}
-
-	if err := cmd.Wait(); err != nil {
-		fmt.Println(err)
-	}
-	done <- true
-}
+// called by: handleDoor(conn, "modules/door.exe")
 
 func newUser(conn net.Conn, db *sql.DB) {
 	var attempts int = 0
@@ -454,11 +410,6 @@ func getMenu(conn net.Conn, user User, menuName string) {
 	if typ == "menu" {
 		prevmenu = currentMenu
 		getMenu(conn, user, args)
-	} else if typ == "door" {
-		done := make(chan bool)
-		handleDoor(conn, "./"+args, done)
-		<-done
-		return
 	} else {
 		handleSelection(conn, user, args, lvl, currentMenu)
 	}
@@ -523,7 +474,8 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 		case "bye":
 			logout(conn, user)
 		case "teleconference":
-			// code to handle teleconference feature
+			chatroom.MultiUserChat(conn)
+			getMenu(conn, user, currentMenu)
 		case "userlist":
 			// code to handle userlist feature
 		case "obbs":
@@ -553,6 +505,9 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 // Handle Connection and Main functions
 func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	username = ""
+	if prelogin {
+		showTextFile(conn, asciipath+"prelogin.asc", 1)
+	}
 	defer conn.Close()
 	if login(conn, db) {
 		getMenu(conn, user, "main")

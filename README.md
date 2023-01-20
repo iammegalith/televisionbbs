@@ -1,7 +1,18 @@
 # televisionbbs
 This is the home of TeleVision Bulletin Board System.
 
-## As of Jan 19 2023: INCOMPLETE 
+building this thing:
+
+```
+go mod init
+go mod tidy
+go build -o bbs main.go
+go build -o hello externals/hello/main
+go build -o guess externals/guess/main.go
+```
+then just run bbs and telnet to it on port 8080
+
+## As of Jan 20 2023: INCOMPLETE 
 This is incomplete - it kind of works, but there are a lot of fixes required.
 
 If you are playing with this codebase and run into issues or areas of improvement - please create an issue.  Or find me on Discord https://discord.gg/42FXyAU8MN
@@ -13,10 +24,12 @@ Works:
 * Runs on Windows, Linux, and Mac so far.
 * Menu system basically works
 * Show Text Files
+* prelogin message/file/text thing. Shows a message prior to login.
 
 Sort of works:  
-* I have a basic "door" system that kind of works.  I am not happy enough to call it "ok for now" 
-   
+* THIS IS SO BAD RIGHT NOW: I have a basic "door" system that kind of works.  I am not happy enough to call it "ok for now" 
+* Chatroom - Teleconference - it kind of works. cant do a lot in it.. but.. its sort of there.
+
 I am still fiddling with how to display ANSI properly.  Either I get total trash or I get a display with some weird half-height character space between lines.  
 
 
@@ -26,6 +39,11 @@ Also - still super happy to have anyone who wants to throw some code at function
 If I don't have a working admin console from a volunteer by the time I finish the core functionality, I'll ask ChatGPT to make one for me ;)  
 
 # CHANGELOG
+
+## Date: Jan 20 2023
+### Updates
+* Started adding chatroom in
+* Put a bounty on the door system. Its crazy how something so basic is so much of a PITA. 
 
 ## Date: Jan 19 2023
 ### Updates

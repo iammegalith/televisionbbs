@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"sync"
 )
 
 func main() {
-	// Create a channel to communicate with the handleDoor function
+	var wg sync.WaitGroup
+	wg.Add(1) // Add 1 to the WaitGroup
 	done := make(chan bool)
 
 	// Print "Hello, world!" to the screen
@@ -16,4 +19,7 @@ func main() {
 
 	// Wait for the handleDoor function to receive the signal
 	<-done
+	wg.Done() // Signal that the program has finished
+	wg.Wait() // Wait for all goroutines to finish executing
+	os.Exit(0)
 }
