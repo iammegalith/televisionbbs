@@ -32,6 +32,7 @@ func (c *Chat) AddConnection(conn net.Conn) {
 func (c *Chat) RemoveConnection(conn net.Conn) {
 	for i, cn := range c.Connections {
 		if cn == conn {
+			fmt.Println("\r\nRemoving connection")
 			c.Connections = append(c.Connections[:i], c.Connections[i+1:]...)
 			break
 		}
@@ -66,26 +67,36 @@ func MultiUserChat(conn net.Conn) {
 		}
 		// Check if the message is a command
 		if len(message) > 0 && message[0] == '/' {
-			parts := strings.SplitN(message, " ", 2)
-			fmt.Println("Command:", parts[0])
-			switch parts[0] {
-			case "/pm":
+			var argString string
+			var msgString string
+			parts := strings.SplitN(message, " ", 3)
+			var commandString = strings.TrimSpace(util.TrimFirstChar(parts[0]))
+			fmt.Println("Command:", commandString)
+			if len(parts) > 1 {
+				argString = strings.TrimSpace(parts[1])
+			}
+			if len(parts) > 2 {
+				msgString = parts[2]
+			}
+			switch commandString {
+			case "pm":
 				// Send the private message to the specified user
-				recipient := parts[1]
-				msg := fmt.Sprintf("%s: %s", username, parts[2])
+				recipient := argString
+				msg := fmt.Sprintf("%s: %s", username, msgString)
 				for _, c := range chat.Connections {
 					if util.LoggedInUsers[c] == recipient {
 						fmt.Fprintln(c, msg)
 						break
 					}
 				}
-			case "/who":
+			case "who":
 				// Send a list of logged-in users to the connection
-				fmt.Fprintln(conn, "Logged-in users:")
+				fmt.Fprintln(conn, "\r\nLogged-in users:")
 				for _, c := range chat.Connections {
-					fmt.Fprintln(conn, util.LoggedInUsers[c])
+					fmt.Fprintln(conn, "\r\n"+util.LoggedInUsers[c])
+					fmt.Fprintln(conn, "")
 				}
-			case "/q":
+			case "q":
 				// Remove the connection from the chat
 				chat.RemoveConnection(conn)
 			}

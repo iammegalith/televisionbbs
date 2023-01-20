@@ -1,6 +1,9 @@
 package util
 
-import "net"
+import (
+	"net"
+	"unicode/utf8"
+)
 
 var LoggedInUsers = make(map[net.Conn]string)
 
@@ -40,3 +43,8 @@ const (
 	ANSI_CURSOR_HOME       = "\x1b[H"
 	CR_LF                  = "\r\n"
 )
+
+func TrimFirstChar(s string) string {
+	_, i := utf8.DecodeRuneInString(s)
+	return s[i:]
+}

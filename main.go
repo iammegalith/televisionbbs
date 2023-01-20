@@ -1,6 +1,7 @@
 package main
 
 import (
+	// Built-in Packages
 	"bufio"
 	"bytes"
 	"database/sql"
@@ -10,8 +11,11 @@ import (
 	"strconv"
 	"strings"
 
+	// TeleVision BBS Internal Packages
 	"televisionbbs/chatroom"
+	"televisionbbs/util"
 
+	// Third Party Packages
 	"github.com/go-ini/ini"
 	"github.com/k0kubun/go-ansi"
 	_ "github.com/mattn/go-sqlite3"
@@ -83,6 +87,7 @@ const (
 	BBS_VERSION = "1Q2023.1"
 )
 
+// Strings and BBS Configuration
 var (
 	prevmenu           string = ""
 	username           string = ""
@@ -137,6 +142,13 @@ var (
 	cutranslation int
 	cuactive      bool
 	cuclearscreen bool
+)
+
+// BBS Vars
+var (
+	useANSI bool
+	textDir string
+	textExt string
 )
 
 // General Command and Functions
@@ -240,6 +252,15 @@ func newUser(conn net.Conn, db *sql.DB) {
 	fmt.Fprintf(conn, "Thank you for registering %s.\r\n", username)
 }
 
+func clearScreen(conn net.Conn) {
+	if useANSI {
+		fmt.Fprint(conn, util.ANSI_CLEAR_SCREEN)
+		fmt.Fprint(conn, util.ANSI_CURSOR_HOME)
+	} else {
+		fmt.Fprint(conn, "Please Enable ANSI mode to use this feature")
+	}
+}
+
 func login(conn net.Conn, db *sql.DB) bool {
 	fmt.Fprint(conn, "\r\nWelcome to the BBS. Are you a new user? (y/n): ")
 	reader := bufio.NewReader(conn)
@@ -279,6 +300,7 @@ func login(conn net.Conn, db *sql.DB) bool {
 	cutranslation = user.Translation
 	cuactive = user.Active
 	cuclearscreen = user.Clearscreen
+	util.LoggedInUsers[conn] = user.Username
 
 	if err != nil {
 		if err == sql.ErrNoRows {
