@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -146,9 +147,10 @@ var (
 
 // BBS Vars
 var (
-	useANSI bool
-	textDir string
-	textExt string
+	useANSI    bool
+	textDir    string
+	textExt    string
+	ExitStatus string
 )
 
 // General Command and Functions
@@ -454,6 +456,32 @@ func pressKey(conn net.Conn) error {
 	return nil
 }
 
+func handleChatroom(conn net.Conn) {
+	ExitStatus = chatroom.MultiUserChat(conn, cuname)
+
+	if ExitStatus == "EXIT" {
+		return // Exit the program
+	}
+}
+
+// look at:
+/*
+if err := cmd.Run() ; err != nil {
+    if exitError, ok := err.(*exec.ExitError); ok {
+        return exitError.ExitCode()
+    }
+}
+*/
+
+// ALSO - look at setting up the io pipes
+func handleDoor(conn net.Conn, args string) {
+	cmd := exec.Command(modulepath+args, cuname)
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("Error running door: ", err)
+	}
+}
+
 func askYesNo(conn net.Conn, question string) (bool, error) {
 	var response string
 	fmt.Fprint(conn, question+" (y/n): ")
@@ -496,8 +524,11 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 		case "bye":
 			logout(conn, user)
 		case "teleconference":
-			chatroom.MultiUserChat(conn)
+			fmt.Println("User: " + cuname + " is in the teleconference room.")
+			handleChatroom(conn)
 			getMenu(conn, user, currentMenu)
+		case "door":
+			handleDoor(conn, cuname)
 		case "userlist":
 			// code to handle userlist feature
 		case "obbs":
@@ -631,7 +662,7 @@ func main() {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println(err)
-			continue
+			return
 		}
 		go handleConnection(conn, db)
 	}

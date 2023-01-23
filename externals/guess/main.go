@@ -10,7 +10,10 @@ import (
 )
 
 func main() {
-	// Print the welcome message
+	runGame()
+}
+
+func runGame() string {
 	fmt.Println("This is an example of how to write a super simple door game for TeleVision BBS.")
 	fmt.Println("Welcome to the guessing game!")
 	fmt.Println("I'm thinking of a number between 1 and 100. Can you guess it?")
@@ -29,7 +32,7 @@ func main() {
 		guess = strings.TrimSpace(guess)
 		// Check if the user wants to quit
 		if guess == "quit" {
-			break
+			return ("EXIT")
 		}
 		// Parse the user's guess as an integer
 		guessInt, err := strconv.Atoi(guess)
@@ -48,7 +51,6 @@ func main() {
 		} else {
 			fmt.Println("Your guess is too high.")
 		}
+		return "EXIT"
 	}
-	fmt.Println("Thanks for playing!")
-	return
 }
