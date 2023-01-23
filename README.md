@@ -4,7 +4,7 @@ This is the home of TeleVision Bulletin Board System.
 building this thing:
 
 ```
-go mod init
+go mod init televisionbbs
 go mod tidy
 go build -o bbs main.go
 go build -o hello externals/hello/main
@@ -12,13 +12,13 @@ go build -o guess externals/guess/main.go
 ```
 then just run bbs and telnet to it on port 8080
 
-## As of Jan 20 2023: INCOMPLETE 
+## As of Jan 23 2023: STILL INCOMPLETE 
 This is incomplete - it kind of works, but there are a lot of fixes required.
 
 If you are playing with this codebase and run into issues or areas of improvement - please create an issue.  Or find me on Discord https://discord.gg/42FXyAU8MN
 
 
-Works:  
+## Works:  
 * Login
 * New User Registration
 * Runs on Windows, Linux, and Mac so far.
@@ -26,10 +26,15 @@ Works:
 * Show Text Files
 * prelogin message/file/text thing. Shows a message prior to login.
 
-Sort of works:  
-* THIS IS SO BAD RIGHT NOW: I have a basic "door" system that kind of works.  I am not happy enough to call it "ok for now" 
+## Sort of works:  
 * Chatroom - Teleconference - it kind of works. cant do a lot in it.. but.. its sort of there.
 
+## Does not work - but getting there:
+* Message Bases - A lot of the code is in place. I just need to refine it.
+* File Areas - same here.  A lot of code needs fixing, but the core is there now.
+* Doors - I am working on this with extra care. I am building the system to handle redirecting STDIO, so that the doors can be written in any language.  I am about a week out on this, I think.
+
+### This is irritating: 
 I am still fiddling with how to display ANSI properly.  Either I get total trash or I get a display with some weird half-height character space between lines.  
 
 
