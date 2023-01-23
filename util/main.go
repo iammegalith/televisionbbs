@@ -2,6 +2,7 @@ package util
 
 import (
 	"net"
+	"time"
 	"unicode/utf8"
 )
 
@@ -16,6 +17,31 @@ type Message struct {
 	Postto   string
 }
 
+type FileArea struct {
+    ID           int
+    AreaName     string
+    Filename     string
+    Description  string
+    UploadedBy   string
+    Date         time.Time
+    Size         int64
+}
+
+type FileAreaInfo struct {
+    ID          int
+    AreaName    string
+    Description string
+}
+
+type File struct {
+    ID          int
+    AreaName    string
+    FileName    string
+    Description string
+    UploadedBy  string
+    Date        time.Time
+    Size        int
+}
 
 // Global Variables
 var LoggedInUsers = make(map[net.Conn]string)

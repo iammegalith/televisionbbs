@@ -18,3 +18,13 @@ CREATE TABLE messages (
     message TEXT NOT NULL,
     postto TEXT NOT NULL,
 )
+
+CREATE TABLE fileareas (
+    id INTEGER PRIMARY KEY,
+    areaname TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    description TEXT NOT NULL,
+    uploadedby TEXT NOT NULL,
+    date TEXT NOT NULL,
+    size INTEGER NOT NULL,
+)
