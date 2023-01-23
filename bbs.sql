@@ -8,3 +8,13 @@ CREATE TABLE users (
     active INTEGER NOT NULL,
     clearscreen INTEGER NOT NULL,
 );
+
+CREATE TABLE messages (
+ id INTEGER PRIMARY KEY,
+ basename TEXT NOT NULL,
+ subject TEXT NOT NULL,
+    author TEXT NOT NULL,
+    date TEXT NOT NULL,
+    message TEXT NOT NULL,
+    postto TEXT NOT NULL,
+)

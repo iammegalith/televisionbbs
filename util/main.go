@@ -5,6 +5,19 @@ import (
 	"unicode/utf8"
 )
 
+// Structures
+type Message struct {
+	ID       int
+	Basename string
+	Subject  string
+	Author   string
+	Date     string
+	Message  string
+	Postto   string
+}
+
+
+// Global Variables
 var LoggedInUsers = make(map[net.Conn]string)
 
 const (
@@ -44,6 +57,7 @@ const (
 	CR_LF                  = "\r\n"
 )
 
+// Global Functions
 func TrimFirstChar(s string) string {
 	_, i := utf8.DecodeRuneInString(s)
 	return s[i:]
