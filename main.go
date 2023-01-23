@@ -1,17 +1,24 @@
 package main
 
 import (
+	// Built-in Packages
 	"bufio"
 	"bytes"
 	"database/sql"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
+	// TeleVision BBS Internal Packages
 	"televisionbbs/chatroom"
+	"televisionbbs/util"
 
+	//"televisionbbs/messages"
+
+	// Third Party Packages
 	"github.com/go-ini/ini"
 	"github.com/k0kubun/go-ansi"
 	_ "github.com/mattn/go-sqlite3"
@@ -83,6 +90,7 @@ const (
 	BBS_VERSION = "1Q2023.1"
 )
 
+// Strings and BBS Configuration
 var (
 	prevmenu           string = ""
 	username           string = ""
@@ -137,6 +145,14 @@ var (
 	cutranslation int
 	cuactive      bool
 	cuclearscreen bool
+)
+
+// BBS Vars
+var (
+	useANSI    bool
+	textDir    string
+	textExt    string
+	ExitStatus string
 )
 
 // General Command and Functions
@@ -240,6 +256,15 @@ func newUser(conn net.Conn, db *sql.DB) {
 	fmt.Fprintf(conn, "Thank you for registering %s.\r\n", username)
 }
 
+func clearScreen(conn net.Conn) {
+	if useANSI {
+		fmt.Fprint(conn, util.ANSI_CLEAR_SCREEN)
+		fmt.Fprint(conn, util.ANSI_CURSOR_HOME)
+	} else {
+		fmt.Fprint(conn, "Please Enable ANSI mode to use this feature")
+	}
+}
+
 func login(conn net.Conn, db *sql.DB) bool {
 	fmt.Fprint(conn, "\r\nWelcome to the BBS. Are you a new user? (y/n): ")
 	reader := bufio.NewReader(conn)
@@ -279,6 +304,7 @@ func login(conn net.Conn, db *sql.DB) bool {
 	cutranslation = user.Translation
 	cuactive = user.Active
 	cuclearscreen = user.Clearscreen
+	util.LoggedInUsers[conn] = user.Username
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -432,6 +458,32 @@ func pressKey(conn net.Conn) error {
 	return nil
 }
 
+func handleChatroom(conn net.Conn) {
+	ExitStatus = chatroom.MultiUserChat(conn, cuname)
+
+	if ExitStatus == "EXIT" {
+		return // Exit the program
+	}
+}
+
+// look at:
+/*
+if err := cmd.Run() ; err != nil {
+    if exitError, ok := err.(*exec.ExitError); ok {
+        return exitError.ExitCode()
+    }
+}
+*/
+
+// ALSO - look at setting up the io pipes
+func handleDoor(conn net.Conn, args string) {
+	cmd := exec.Command(modulepath+args, cuname)
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("Error running door: ", err)
+	}
+}
+
 func askYesNo(conn net.Conn, question string) (bool, error) {
 	var response string
 	fmt.Fprint(conn, question+" (y/n): ")
@@ -474,8 +526,11 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 		case "bye":
 			logout(conn, user)
 		case "teleconference":
-			chatroom.MultiUserChat(conn)
+			fmt.Println("User: " + cuname + " is in the teleconference room.")
+			handleChatroom(conn)
 			getMenu(conn, user, currentMenu)
+		case "door":
+			handleDoor(conn, cuname)
 		case "userlist":
 			// code to handle userlist feature
 		case "obbs":
@@ -609,7 +664,7 @@ func main() {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println(err)
-			continue
+			return
 		}
 		go handleConnection(conn, db)
 	}

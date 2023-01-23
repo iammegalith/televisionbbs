@@ -1,7 +1,49 @@
 package util
 
-import "net"
+import (
+	"net"
+	"time"
+	"unicode/utf8"
+)
 
+// Structures
+type Message struct {
+	ID       int
+	Basename string
+	Subject  string
+	Author   string
+	Date     string
+	Message  string
+	Postto   string
+}
+
+type FileArea struct {
+    ID           int
+    AreaName     string
+    Filename     string
+    Description  string
+    UploadedBy   string
+    Date         time.Time
+    Size         int64
+}
+
+type FileAreaInfo struct {
+    ID          int
+    AreaName    string
+    Description string
+}
+
+type File struct {
+    ID          int
+    AreaName    string
+    FileName    string
+    Description string
+    UploadedBy  string
+    Date        time.Time
+    Size        int
+}
+
+// Global Variables
 var LoggedInUsers = make(map[net.Conn]string)
 
 const (
@@ -40,3 +82,9 @@ const (
 	ANSI_CURSOR_HOME       = "\x1b[H"
 	CR_LF                  = "\r\n"
 )
+
+// Global Functions
+func TrimFirstChar(s string) string {
+	_, i := utf8.DecodeRuneInString(s)
+	return s[i:]
+}
