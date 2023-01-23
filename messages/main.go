@@ -66,12 +66,12 @@ func scanForNewMessages(db *sql.DB, lastRead time.Time) ([]util.Message, error) 
 	}
 	return messages, nil
 }
-func fullScreenEditor(conn net.Conn, header, messageBase string) string {
+func fullScreenEditor(conn net.Conn, db *sql.DB, header, messageBase string) error {
 	var input string
+	var subject, author, postto, message string
 	conn.Write([]byte(header + "\n"))
 	conn.Write([]byte("Message Base: " + messageBase + "\n"))
 	conn.Write([]byte("Ctl-Q to Quit | Ctl-S to save and post\n"))
-
 	// get terminal size
 	cmd := exec.Command("stty", "size")
 	cmd.Stdin = conn
@@ -85,25 +85,22 @@ func fullScreenEditor(conn net.Conn, header, messageBase string) string {
 		input += string(line) + "\n"
 		conn.Write([]byte("\033[1A")) // move cursor up one line
 		conn.Write([]byte("\033[K"))  // clear current line
-		// unsure what this is, keeping to test:
-		//if len(input) > 0 && input[len(input)-2:] == ".\n" {
-		//	break
-		//}
 		if len(input) > 0 && input[0] == '.' {
 			switch input {
 			case ".s":
 				// Save and post message
-				if err := postMessage(db, "general", subject, author, postto, message); err != nil {
-					conn.Write([]byte("Error posting message: " + err.Error()))
-					return err
+				if err := postMessage(db, messageBase, subject, author, postto, message); err != nil {
+					return fmt.Errorf("error posting message: %v", err)
 				}
-				conn.Write([]byte("Message posted successfully."))
 				return nil
 			case ".q":
 				// Quit editor without saving
 				conn.Write([]byte("Exiting editor.\n"))
 				return nil
+			default:
+				message += input
 			}
+			input = ""
 		}
 		if len(strings.Split(input, "\n")) >= rows-2 { // subtract 2 to account for the header and bottom bar
 			conn.Write([]byte("\033[2J")) // clear screen
@@ -114,5 +111,4 @@ func fullScreenEditor(conn net.Conn, header, messageBase string) string {
 			conn.Write([]byte(input))
 		}
 	}
-	return input
 }
