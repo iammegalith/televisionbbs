@@ -15,7 +15,8 @@ import (
 	// TeleVision BBS Internal Packages
 	"televisionbbs/chatroom"
 	"televisionbbs/util"
-	"televisionbbs/messages"
+
+	//"televisionbbs/messages"
 
 	// Third Party Packages
 	"github.com/go-ini/ini"
