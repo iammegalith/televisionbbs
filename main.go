@@ -43,7 +43,7 @@ type Config struct {
 		Bbsname         string
 		Sysopname       string
 		Prelogin        bool
-		Bulletins       bool
+		Showbulls       bool
 		Newregistration bool
 		Defaultlevel    int
 		Configpath      string
@@ -98,7 +98,7 @@ var (
 	bbsname            string = "TelevisionBBS"
 	sysopname          string = "Sysop"
 	prelogin           bool   = true
-	bulletins          bool   = true
+	showbulls          bool   = true
 	newregistration    bool   = true
 	defaultlevel       int    = 0
 	configpath         string = "config/"
@@ -375,7 +375,6 @@ func showTextFile(conn net.Conn, filePath string, linefeeds int) {
 			line = line[:len(line)-1]
 		}
 		if linefeeds == 1 {
-			fmt.Println("Linefeeds: 1")
 			fmt.Fprint(conn, line+"\r\n")
 		} else {
 			fmt.Fprint(conn, line)
@@ -459,7 +458,7 @@ func pressKey(conn net.Conn) error {
 }
 
 func handleChatroom(conn net.Conn) {
-	ExitStatus = chatroom.MultiUserChat(conn, cuname)
+	ExitStatus = chatroom.MultiUserChat(conn, cuname, cutranslation, configpath)
 
 	if ExitStatus == "EXIT" {
 		return // Exit the program
@@ -499,12 +498,13 @@ func askYesNo(conn net.Conn, question string) (bool, error) {
 	} else if response == "n" || response == "no" {
 		return false, nil
 	} else {
-		return false, fmt.Errorf("\r\nInvalid response. Please enter 'y' or 'n'.")
+		return false, fmt.Errorf("\r\ninvalid response. Please enter 'y' or 'n'")
 	}
 }
 
 func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
 	if lvl > user.Level {
+		fmt.Fprintf(conn, "\r\n")
 		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
 	} else {
 		switch args {
@@ -513,6 +513,7 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 			pressKey(conn)
 			getMenu(conn, user, currentMenu)
 		case "goodbye":
+			fmt.Fprintf(conn, "\r\n")
 			result, err := askYesNo(conn, "Are you sure you want to log out?")
 			if err != nil {
 				fmt.Fprintf(conn, "Error: %v", err)
@@ -526,7 +527,6 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 		case "bye":
 			logout(conn, user)
 		case "teleconference":
-			fmt.Println("User: " + cuname + " is in the teleconference room.")
 			handleChatroom(conn)
 			getMenu(conn, user, currentMenu)
 		case "door":
@@ -593,7 +593,7 @@ func main() {
 	bbsname = cfg.Mainconfig.Bbsname
 	sysopname = cfg.Mainconfig.Sysopname
 	prelogin = cfg.Mainconfig.Prelogin
-	bulletins = cfg.Mainconfig.Bulletins
+	showbulls = cfg.Mainconfig.Showbulls
 	newregistration = cfg.Mainconfig.Newregistration
 	defaultlevel = cfg.Mainconfig.Defaultlevel
 	configpath = cfg.Mainconfig.Configpath
@@ -648,7 +648,7 @@ func main() {
 	} else {
 		fmt.Println("New User Registration is disabled.")
 	}
-	if bulletins {
+	if showbulls {
 		fmt.Println("Bulletins are enabled.")
 	} else {
 		fmt.Println("Bulletins are disabled.")
