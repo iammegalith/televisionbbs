@@ -7,6 +7,10 @@ import (
 )
 
 // Structures
+type ActionConfig struct {
+    Actions map[string]string
+}
+
 type Message struct {
 	ID       int
 	Basename string
