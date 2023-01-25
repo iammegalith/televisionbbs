@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ import (
 	// TeleVision BBS Internal Packages
 	"televisionbbs/chatroom"
 	"televisionbbs/util"
+
+	"github.com/iammegalith/go-telnet"
 
 	//"televisionbbs/messages"
 
@@ -84,6 +87,10 @@ type BbsStrings struct {
 		Sysopisaway        string
 		Sysopisbusy        string
 	}
+}
+
+type MyHandler struct {
+	db *sql.DB
 }
 
 const (
@@ -157,7 +164,15 @@ var (
 
 // General Command and Functions
 
-func alreadyLoggedIn(conn net.Conn, username string, db *sql.DB) bool {
+func (h *MyHandler) ServeTELNET(c telnet.Context, w telnet.Writer, r telnet.Reader) {
+	(*h.db).Query("SELECT...")
+	if alreadyLoggedIn(c, w, r, h.db) {
+		// handle already logged in
+	}
+}
+
+func alreadyLoggedIn(c telnet.Context, w telnet.Writer, r telnet.Reader, db *sql.DB) bool {
+
 	var sessionExists bool
 	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions WHERE username = ? and active = 1)", username).Scan(&sessionExists)
 	if err != nil {
@@ -165,17 +180,24 @@ func alreadyLoggedIn(conn net.Conn, username string, db *sql.DB) bool {
 		return false
 	}
 	if sessionExists {
-		reader := bufio.NewReader(conn)
-		fmt.Fprint(conn, "\r\nYou are already logged in. Would you like to end your previous session? (y/n): ")
-		endSession, _ := reader.ReadByte()
-		if endSession == 'y' {
-			// end previous session
-			_, err := db.Exec("UPDATE sessions SET active = 0 WHERE username = ?", username)
-			if err != nil {
-				fmt.Println(err)
+		writeLine(w, []byte("You are already logged in. Would you like to end your previous session? (y/n): "))
+		buffer := make([]byte, 1)
+		n, err := r.Read(buffer)
+		if err != nil {
+			fmt.Println(err)
+			return false
+		}
+		if n > 0 {
+			endSession := buffer[0]
+			if endSession == 'y' {
+				// end previous session
+				_, err := db.Exec("UPDATE sessions SET active = 0 WHERE username = ?", username)
+				if err != nil {
+					fmt.Println(err)
+					return false
+				}
 				return false
 			}
-			return false
 		} else {
 			return true
 		}
@@ -190,10 +212,10 @@ func hashPassword(password string) (string, error) {
 
 // called by: handleDoor(conn, "modules/door.exe")
 
-func newUser(conn net.Conn, db *sql.DB) {
+func newUser(c telnet.Context, w telnet.Writer, r telnet.Reader, db *sql.DB) {
 	var attempts int = 0
 	for {
-		fmt.Fprint(conn, "\r\nPlease choose a username: ")
+		writeLine(w, []byte("\r\nPlease choose a username: "))
 		reader := bufio.NewReader(conn)
 		for {
 			char, _, err := reader.ReadRune()
@@ -256,7 +278,79 @@ func newUser(conn net.Conn, db *sql.DB) {
 	fmt.Fprintf(conn, "Thank you for registering %s.\r\n", username)
 }
 
-func clearScreen(conn net.Conn) {
+// This is used to read the user's input
+// called with:
+//
+//	reader := telnet.Reader(conn)
+//	line, err := readLine(reader)
+func readLine(reader telnet.Reader) (string, error) {
+	buffer := make([]byte, 0, 1024)
+	for {
+		char := make([]byte, 1)
+		n, err := reader.Read(char)
+		if err != nil {
+			return "", err
+		}
+		if n == 1 {
+			if char[0] == '\r' {
+				break
+			}
+			buffer = append(buffer, char[0])
+		}
+	}
+	return string(buffer), nil
+}
+
+// This is used to read a single keypress from the user
+// called with:
+//
+//	reader := telnet.Reader(conn)
+//	hotkey, err := readKey(reader)
+func readKey(reader telnet.Reader) (byte, error) {
+	char := make([]byte, 1)
+	n, err := reader.Read(char)
+	if err != nil {
+		return 0, err
+	}
+	return char[0], nil
+}
+
+// This is used to write a line of text to the user
+// called with:
+//
+//	 writer := telnet.Writer(conn)
+//	 buffer := []byte("Hello, user!\r\n")
+//	without CRLF: buffer := []byte("Hello, user!")
+//	 err := writeBuffer(writer, buffer)
+func writeLine(writer telnet.Writer, buffer []byte) error {
+	_, err := writer.Write(buffer)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// This is used to print a text file to the user
+// called with:
+//     writer := telnet.Writer(conn)
+//     filePath := "./example.txt"
+//     err := showTextFile(writer, filePath)
+
+func showTextFile(writer telnet.Writer, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(writer, file)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func clearScreen(conn telnet.Conn) {
 	if useANSI {
 		fmt.Fprint(conn, util.ANSI_CLEAR_SCREEN)
 		fmt.Fprint(conn, util.ANSI_CURSOR_HOME)
@@ -265,10 +359,12 @@ func clearScreen(conn net.Conn) {
 	}
 }
 
-func login(conn net.Conn, db *sql.DB) bool {
+func login(conn telnet.Conn, db *sql.DB) bool {
 	fmt.Fprint(conn, "\r\nWelcome to the BBS. Are you a new user? (y/n): ")
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
 	reader := bufio.NewReader(conn)
-	isNewUser, _ := reader.ReadByte()
+	isNewUser, _ := conn.ReadByte()
 	if isNewUser == 'y' {
 		fmt.Fprintf(conn, "\r\n")
 		newUser(conn, db)
@@ -331,7 +427,7 @@ func login(conn net.Conn, db *sql.DB) bool {
 	return true
 }
 
-func showAnsiFile(conn net.Conn, filename string) {
+func showAnsiFile(conn telnet.Conn, filename string) {
 	file, err := os.Open(filename)
 	if err != nil {
 		fmt.Fprintf(conn, "Error opening file: %s", err)
@@ -358,41 +454,14 @@ func showAnsiFile(conn net.Conn, filename string) {
 	fmt.Fprint(conn, ansiContent)
 }
 
-func showTextFile(conn net.Conn, filePath string, linefeeds int) {
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Fprintf(conn, "Error: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	// Send the file contents to the user
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
-			line = line[:len(line)-1]
-		}
-		if linefeeds == 1 {
-			fmt.Fprint(conn, line+"\r\n")
-		} else {
-			fmt.Fprint(conn, line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(conn, "Error: %v\n", err)
-	}
-}
-
-func logout(conn net.Conn, user User) {
+func logout(conn telnet.Conn, user User) {
 	fmt.Fprint(conn, "Goodbye!\r\n")
 	username = ""
 	conn.Close()
 }
 
 // Menu System
-func getMenu(conn net.Conn, user User, menuName string) {
+func getMenu(conn telnet.Conn, user User, menuName string) {
 	var currentMenu string = menuName
 	var err error
 	var mcfg *ini.File
@@ -448,7 +517,7 @@ func pressReturn(conn net.Conn) error {
 	return nil
 }
 
-func pressKey(conn net.Conn) error {
+func pressKey(conn telnet.Conn) error {
 	fmt.Fprint(conn, "\r\n--- Press any key ---")
 	_, err := conn.Read(make([]byte, 1))
 	if err != nil {
@@ -457,7 +526,7 @@ func pressKey(conn net.Conn) error {
 	return nil
 }
 
-func handleChatroom(conn net.Conn) {
+func handleChatroom(conn telnet.Conn) {
 	ExitStatus = chatroom.MultiUserChat(conn, cuname, cutranslation, configpath)
 
 	if ExitStatus == "EXIT" {
@@ -475,7 +544,7 @@ if err := cmd.Run() ; err != nil {
 */
 
 // ALSO - look at setting up the io pipes
-func handleDoor(conn net.Conn, args string) {
+func handleDoor(conn telnet.Conn, args string) {
 	cmd := exec.Command(modulepath+args, cuname)
 	err := cmd.Run()
 	if err != nil {
@@ -483,7 +552,7 @@ func handleDoor(conn net.Conn, args string) {
 	}
 }
 
-func askYesNo(conn net.Conn, question string) (bool, error) {
+func askYesNo(conn telnet.Conn, question string) (bool, error) {
 	var response string
 	fmt.Fprint(conn, question+" (y/n): ")
 	scanner := bufio.NewScanner(conn)
@@ -502,7 +571,7 @@ func askYesNo(conn net.Conn, question string) (bool, error) {
 	}
 }
 
-func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
+func handleSelection(conn telnet.Conn, user User, args string, lvl int, currentMenu string) {
 	if lvl > user.Level {
 		fmt.Fprintf(conn, "\r\n")
 		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
@@ -558,8 +627,7 @@ func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu
 }
 
 // Handle Connection and Main functions
-func handleConnection(conn net.Conn, db *sql.DB) (user User) {
-	username = ""
+func handleConnection(conn telnet.Conn, db *sql.DB) (user User) {
 	if prelogin {
 		showTextFile(conn, asciipath+"prelogin.asc", 1)
 	}
@@ -567,7 +635,6 @@ func handleConnection(conn net.Conn, db *sql.DB) (user User) {
 	if login(conn, db) {
 		getMenu(conn, user, "main")
 		logout(conn, user)
-		// end of testing
 	}
 	return
 }
@@ -634,38 +701,43 @@ func main() {
 	sysopisaway = bbsStrings.General.Sysopisaway
 	sysopisbusy = bbsStrings.General.Sysopisbusy
 
-	// start the listener
-	listener, err := net.Listen("tcp", ":"+port)
+	var handler telnet.Handler = &MyHandler{
+		db:                 db,
+		bbsname:            bbsname,
+		sysopname:          sysopname,
+		prelogin:           prelogin,
+		showbulls:          showbulls,
+		newregistration:    newregistration,
+		defaultlevel:       defaultlevel,
+		configpath:         configpath,
+		menuprompt:         menuprompt,
+		welcomestring:      welcomestring,
+		pressanykey:        pressanykey,
+		pressreturn:        pressreturn,
+		entername:          entername,
+		enterpassword:      enterpassword,
+		enternewpassword:   enternewpassword,
+		enterpasswordagain: enterpasswordagain,
+		areyounew:          areyounew,
+		areyousure:         areyousure,
+		ansimode:           ansimode,
+		asciimode:          asciimode,
+		invalidoption:      invalidoption,
+		invalidname:        invalidname,
+		invalidpassword:    invalidpassword,
+		passwordmismatch:   passwordmismatch,
+		userexists:         userexists,
+		usercreated:        usercreated,
+		enterchat:          enterchat,
+		leavechat:          leavechat,
+		pagesysop:          pagesysop,
+		ispagingyou:        ispagingyou,
+		sysopishere:        sysopishere,
+		sysopisaway:        sysopisaway,
+		sysopisbusy:        sysopisbusy,
+	}
+	err = telnet.ListenAndServe(":"+port, handler)
 	if err != nil {
 		fmt.Println(err)
-		return
-	}
-	defer listener.Close()
-
-	fmt.Println("Television BBS v" + BBS_VERSION + "\r\n" + bbsname + " Listening on TCP port " + port + "\r\nSysOp: " + sysopname + "\r\nConfig File Path: " + configpath)
-	if newregistration {
-		fmt.Println("New User Registration is enabled.")
-	} else {
-		fmt.Println("New User Registration is disabled.")
-	}
-	if showbulls {
-		fmt.Println("Bulletins are enabled.")
-	} else {
-		fmt.Println("Bulletins are disabled.")
-	}
-	if prelogin {
-		fmt.Println("Prelogin is enabled.")
-	} else {
-		fmt.Println("Prelogin is disabled.")
-	}
-	fmt.Println("Default userlevel: ", defaultlevel)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		go handleConnection(conn, db)
 	}
 }
