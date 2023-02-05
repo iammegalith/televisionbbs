@@ -1,45 +1,37 @@
 package main
 
 import (
-	// Built-in Packages
+	// Core packages
 	"bufio"
-	"bytes"
 	"database/sql"
 	"fmt"
-	"net"
+	"log"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
+	"time"
 
-	// TeleVision BBS Internal Packages
-	"televisionbbs/chatroom"
+	// Specific to TeleVision BBS
 	"televisionbbs/util"
 
-	//"televisionbbs/messages"
-
-	// Third Party Packages
-	"github.com/go-ini/ini"
-	"github.com/k0kubun/go-ansi"
+	// External Packages
+	"github.com/PatrickRudolph/telnet"
+	"github.com/PatrickRudolph/telnet/options"
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/gcfg.v1"
 )
 
-type User struct {
-	Id          int64
-	Username    string
-	Password    string
-	Level       int
-	Linefeeds   int
-	Translation int
-	Active      bool
-	Clearscreen bool
-}
+// Constants
+const (
+	TELEVISION_VERSION = "1Q2023.1.31"
+)
 
+// Structs
+// Television Config
 type Config struct {
 	Mainconfig struct {
-		Port            int
+		Port            string
+		Listenaddr      string
 		Bbsname         string
 		Sysopname       string
 		Prelogin        bool
@@ -53,9 +45,11 @@ type Config struct {
 		Datapath        string
 		Filespath       string
 		StringsFile     string
+		Textfiles       string
 	}
 }
 
+// Television String
 type BbsStrings struct {
 	General struct {
 		Menuprompt         string
@@ -83,31 +77,54 @@ type BbsStrings struct {
 		Sysopishere        string
 		Sysopisaway        string
 		Sysopisbusy        string
+		Userlisthead       string
+		Userlistfoot       string
 	}
 }
 
-const (
-	BBS_VERSION = "1Q2023.1"
-)
+// Current User Struct
+type CurrentUser struct {
+	username      string
+	conn          *telnet.Connection
+	userStatus    string
+	ansiSupported bool
+	hasAnsi       bool
+	level         int
+	linefeeds     int
+	hotkeys       int
+	active        int
+	clearscreen   int
+}
 
-// Strings and BBS Configuration
+// Global Variables
 var (
-	prevmenu           string = ""
-	username           string = ""
-	port               string = "8080"
-	bbsname            string = "TelevisionBBS"
-	sysopname          string = "Sysop"
-	prelogin           bool   = true
-	showbulls          bool   = true
-	newregistration    bool   = true
-	defaultlevel       int    = 0
-	configpath         string = "config/"
-	stringsfile        string = "strings.config"
-	ansipath           string = "ansi/"
-	asciipath          string = "ascii/"
-	modulepath         string = "modules/"
-	datapath           string = "data/"
-	filespath          string = "files/"
+	// Core Functionality
+
+	TheUser  = make(map[string]CurrentUser)
+	username string
+	currmenu string
+	prevmenu string
+	hasAnsi  bool
+
+	// Television Config
+	port         string
+	listenaddr   string
+	bbsname      string
+	sysopname    string
+	prelogin     bool
+	showbulls    bool
+	newreg       bool
+	defaultlevel int
+	configpath   string
+	ansipath     string
+	asciipath    string
+	modulepath   string
+	datapath     string
+	filespath    string
+	stringsfile  string
+	textfiles    string
+
+	// Strings
 	menuprompt         string = "Please select an option:"
 	welcomestring      string = "Welcome to TelevisionBBS!"
 	pressanykey        string = "Press any key to continue..."
@@ -133,366 +150,177 @@ var (
 	sysopishere        string = "Sysop is here."
 	sysopisaway        string = "Sysop is away."
 	sysopisbusy        string = "Sysop is busy."
+	userlisthead       string = "User List"
+	userlistfoot       string = "========="
 )
 
-// user data
-var (
-	user          User
-	cuid          int64
-	cuname        string
-	culevel       int
-	culinefeeds   int
-	cutranslation int
-	cuactive      bool
-	cuclearscreen bool
-)
-
-// BBS Vars
-var (
-	useANSI    bool
-	textDir    string
-	textExt    string
-	ExitStatus string
-)
-
-// General Command and Functions
-
-func alreadyLoggedIn(conn net.Conn, username string, db *sql.DB) bool {
-	var sessionExists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions WHERE username = ? and active = 1)", username).Scan(&sessionExists)
-	if err != nil {
-		fmt.Println(err)
-		return false
-	}
-	if sessionExists {
-		reader := bufio.NewReader(conn)
-		fmt.Fprint(conn, "\r\nYou are already logged in. Would you like to end your previous session? (y/n): ")
-		endSession, _ := reader.ReadByte()
-		if endSession == 'y' {
-			// end previous session
-			_, err := db.Exec("UPDATE sessions SET active = 0 WHERE username = ?", username)
-			if err != nil {
-				fmt.Println(err)
-				return false
-			}
-			return false
-		} else {
-			return true
-		}
-	}
-	return false
+// Initialization sequences
+func init() {
+	util.Connections = make(map[string]*telnet.Connection)
+	util.UserStatus = make(map[string]string)
 }
 
-func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
-	return string(bytes), err
-}
-
-// called by: handleDoor(conn, "modules/door.exe")
-
-func newUser(conn net.Conn, db *sql.DB) {
-	var attempts int = 0
-	for {
-		fmt.Fprint(conn, "\r\nPlease choose a username: ")
-		reader := bufio.NewReader(conn)
-		for {
-			char, _, err := reader.ReadRune()
-			if err != nil {
-				break
-			}
-			if char == '\r' || char == '\n' {
-				break
-			}
-			fmt.Fprint(conn, string(char))
-			username += string(char)
-		}
-
-		var user User
-		fmt.Println("SELECT id FROM users WHERE username = ?", username)
-		err := db.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&user.Id)
-		fmt.Println(err)
-		if err != sql.ErrNoRows {
-			attempts++
-			if attempts >= 3 {
-				fmt.Fprint(conn, "\r\nToo many attempts. Please try again later.\r\n")
-				logout(conn, user)
-				return
-			}
-
-			fmt.Fprint(conn, "\r\nUsername already exists, please choose another: ")
-			username = ""
-			continue
-		}
-		break
-	}
-	fmt.Println("Username: " + username)
-	fmt.Fprint(conn, "\r\nPassword: ")
-	passwordScanner := bufio.NewScanner(conn)
-	passwordScanner.Scan()
-	password := passwordScanner.Text()
-	fmt.Fprint(conn, "\r\nRe-enter Password: ")
-	rePasswordScanner := bufio.NewScanner(conn)
-	rePasswordScanner.Scan()
-	rePassword := rePasswordScanner.Text()
-
-	if password != rePassword {
-		fmt.Fprint(conn, "Passwords do not match. Please try again.\r\n")
-		return
-	}
-
-	// You should hash the password and store the hashed password
-	hashedPassword, _ := hashPassword(password)
-	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,translation, active, clearscreen) values(?,?,?,?,?,?,?)")
+// Read BBS Config File
+//
+// Call with:
+//
+// getConfig()
+func getConfig() {
+	var cfg Config
+	err := gcfg.ReadFileInto(&cfg, "config/television.conf")
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Failed to parse config file:", err)
 		return
-	}
-	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0, 1, 0)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	fmt.Fprintf(conn, "Thank you for registering %s.\r\n", username)
-}
-
-func clearScreen(conn net.Conn) {
-	if useANSI {
-		fmt.Fprint(conn, util.ANSI_CLEAR_SCREEN)
-		fmt.Fprint(conn, util.ANSI_CURSOR_HOME)
 	} else {
-		fmt.Fprint(conn, "Please Enable ANSI mode to use this feature")
+		port = cfg.Mainconfig.Port
+		listenaddr = cfg.Mainconfig.Listenaddr
+		bbsname = cfg.Mainconfig.Bbsname
+		sysopname = cfg.Mainconfig.Sysopname
+		prelogin = cfg.Mainconfig.Prelogin
+		showbulls = cfg.Mainconfig.Showbulls
+		newreg = cfg.Mainconfig.Newregistration
+		defaultlevel = cfg.Mainconfig.Defaultlevel
+		configpath = cfg.Mainconfig.Configpath
+		ansipath = cfg.Mainconfig.Ansipath
+		asciipath = cfg.Mainconfig.Asciipath
+		modulepath = cfg.Mainconfig.Modulepath
+		datapath = cfg.Mainconfig.Datapath
+		filespath = cfg.Mainconfig.Filespath
+		stringsfile = cfg.Mainconfig.StringsFile
+		textfiles = cfg.Mainconfig.Textfiles
 	}
 }
 
-func login(conn net.Conn, db *sql.DB) bool {
-	fmt.Fprint(conn, "\r\nWelcome to the BBS. Are you a new user? (y/n): ")
+func getStrings() {
+	var bbsStrings BbsStrings
+	err := gcfg.ReadFileInto(&bbsStrings, configpath+stringsfile)
+	if err != nil {
+		fmt.Println("Failed to parse strings file:", err)
+		return
+	} else {
+		menuprompt = bbsStrings.General.Menuprompt
+		welcomestring = bbsStrings.General.Welcomestring
+		pressanykey = bbsStrings.General.Pressanykey
+		pressreturn = bbsStrings.General.Pressreturn
+		entername = bbsStrings.General.Entername
+		enterpassword = bbsStrings.General.Enterpassword
+		enternewpassword = bbsStrings.General.Enternewpassword
+		enterpasswordagain = bbsStrings.General.Enterpasswordagain
+		areyounew = bbsStrings.General.Areyounew
+		areyousure = bbsStrings.General.Areyousure
+		ansimode = bbsStrings.General.Ansimode
+		asciimode = bbsStrings.General.Asciimode
+		invalidoption = bbsStrings.General.Invalidoption
+		invalidname = bbsStrings.General.Invalidname
+		invalidpassword = bbsStrings.General.Invalidpassword
+		passwordmismatch = bbsStrings.General.Passwordmismatch
+		userexists = bbsStrings.General.Userexists
+		usercreated = bbsStrings.General.Usercreated
+		enterchat = bbsStrings.General.Enterchat
+		leavechat = bbsStrings.General.Leavechat
+		pagesysop = bbsStrings.General.Pagesysop
+		ispagingyou = bbsStrings.General.Ispagingyou
+		sysopishere = bbsStrings.General.Sysopishere
+		sysopisaway = bbsStrings.General.Sysopisaway
+		sysopisbusy = bbsStrings.General.Sysopisbusy
+		userlisthead = bbsStrings.General.Userlisthead
+		userlistfoot = bbsStrings.General.Userlistfoot
+	}
+}
+
+// Converts error to a byte string
+//
+// Call with:
+//
+// writeLine(w, []byte(convertError(err)))
+func convertError(err error) (errorString string) {
+	errMessage := fmt.Sprintf("%s", err)
+	return (errMessage)
+}
+
+// Converts error to a byte string
+// Call with: writeLine(w, []byte(convertByteToString(strValue)))
+func convertByteToString(byteThing byte) (strValue string) {
+	strValue = string([]byte{byteThing})
+	return (strValue)
+}
+
+// This is used to read a single keypress from the user
+// called with:
+//
+//	reader := telnet.Reader(conn)
+//	hotkey, err := readKey(reader)
+func readKey(conn *telnet.Connection) (string, error) {
+	char := make([]byte, 1)
+	_, err := conn.Read(char)
+	if err != nil {
+		return "error", err
+	}
+	returnKey := convertByteToString(char[0])
+	return returnKey, nil
+}
+
+// This is used to read the user's input
+// called with:
+func readLine(conn *telnet.Connection) (string, error) {
 	reader := bufio.NewReader(conn)
-	isNewUser, _ := reader.ReadByte()
-	if isNewUser == 'y' {
-		fmt.Fprintf(conn, "\r\n")
-		newUser(conn, db)
-		return true
-	}
-	fmt.Fprintf(conn, "\r\n")
-	fmt.Fprint(conn, "Username: ")
-	var username string
-	for {
-		char, err := reader.ReadByte()
-		fmt.Fprint(conn, string(char))
-		if err != nil {
-			break
-		}
-		if char == '\r' || char == '\n' {
-			break
-		}
-		username += string(char)
-	}
-	username = strings.TrimSpace(username)
-	if username == "" {
-		fmt.Fprintln(conn, "\r\nUsername cannot be blank.")
-		return login(conn, db)
-	}
-	fmt.Fprint(conn, "\r\nPassword: ")
-	password, _, _ := bufio.NewReader(conn).ReadLine()
-	err := db.QueryRow("SELECT id, username, password, level, linefeeds, translation, active, clearscreen FROM users WHERE username = ?", username).Scan(&user.Id, &user.Username, &user.Password, &user.Level, &user.Linefeeds, &user.Translation, &user.Active, &user.Clearscreen)
-
-	cuid = user.Id
-	cuname = user.Username
-	culevel = user.Level
-	culinefeeds = user.Linefeeds
-	cutranslation = user.Translation
-	cuactive = user.Active
-	cuclearscreen = user.Clearscreen
-	util.LoggedInUsers[conn] = user.Username
-
+	line, _, err := reader.ReadLine()
 	if err != nil {
-		if err == sql.ErrNoRows {
-			fmt.Fprintf(conn, "\r\n")
-			fmt.Fprint(conn, "Incorrect username or password.\r\n")
-			return false
-		}
-		fmt.Println(err)
-		return false
+		return "", err
 	}
-	// Compare the plain text password with the hashed password stored in the database
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
-	if err != nil {
-		fmt.Fprintf(conn, "\r\n")
-		fmt.Fprint(conn, "Incorrect username or password.\r\n")
-		return false
-	}
-	if alreadyLoggedIn(conn, username, db) {
-		fmt.Fprint(conn, "\r\nThis account is already logged in. Please try again later.\r\n")
-		return false
-	}
-	fmt.Fprintf(conn, "\r\n")
-	fmt.Fprintf(conn, "Welcome, %s.\r\n", cuname)
-	return true
+	return strings.TrimSpace(string(line)), nil
 }
 
-func showAnsiFile(conn net.Conn, filename string) {
-	file, err := os.Open(filename)
-	if err != nil {
-		fmt.Fprintf(conn, "Error opening file: %s", err)
-		return
-	}
-	defer file.Close()
-
-	buf := new(bytes.Buffer)
-	_, err = buf.ReadFrom(file)
-	if err != nil {
-		fmt.Fprintf(conn, "Error reading file: %s", err)
-		return
-	}
-
-	// remove BOM from file
-	content := bytes.TrimPrefix(buf.Bytes(), []byte("\xef\xbb\xbf"))
-
-	// Interpret ANSI codes
-	ansiContent, err := ansi.Printf(string(content))
-	if err != nil {
-		fmt.Fprintf(conn, "Error interpreting ANSI codes: %s", err)
-		return
-	}
-	fmt.Fprint(conn, ansiContent)
-}
-
-func showTextFile(conn net.Conn, filePath string, linefeeds int) {
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		fmt.Fprintf(conn, "Error: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	// Send the file contents to the user
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if len(line) > 0 && (line[len(line)-1] == '\r' || line[len(line)-1] == '\n') {
-			line = line[:len(line)-1]
-		}
-		if linefeeds == 1 {
-			fmt.Fprint(conn, line+"\r\n")
-		} else {
-			fmt.Fprint(conn, line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(conn, "Error: %v\n", err)
-	}
-}
-
-func logout(conn net.Conn, user User) {
-	fmt.Fprint(conn, "Goodbye!\r\n")
-	username = ""
-	conn.Close()
-}
-
-// Menu System
-func getMenu(conn net.Conn, user User, menuName string) {
-	var currentMenu string = menuName
-	var err error
-	var mcfg *ini.File
-	mcfg, err = ini.Load(fmt.Sprintf(configpath+"%s.config", menuName))
-	if err != nil {
-		fmt.Printf("Error loading config file: %v", err)
-		return
-	}
-
-	// Get the menu options from the INI file
-	options := mcfg.Sections()
-
-	// Display the menu
-	showTextFile(conn, fmt.Sprintf(asciipath+"%s.asc", menuName), culinefeeds)
-	fmt.Fprint(conn, menuprompt)
-
-	// Get user input for menu selection
-	user_input, _ := bufio.NewReader(conn).ReadString('\n')
-	user_input = strings.TrimSpace(user_input)
-
-	// Get the selected menu option
-	var selection *ini.Section
-	for _, option := range options {
-		if option.Key("fast").String() == user_input {
-			selection = option
-			break
-		}
-	}
-
-	if selection == nil {
-		fmt.Fprint(conn, "\r\nInvalid selection")
-		getMenu(conn, user, currentMenu)
-		return
-	}
-
-	typ := selection.Key("type").String()
-	args := selection.Key("arguments").String()
-	lvl := selection.Key("level").MustInt(0)
-
-	if typ == "menu" {
-		prevmenu = currentMenu
-		getMenu(conn, user, args)
-	} else {
-		handleSelection(conn, user, args, lvl, currentMenu)
-	}
-}
-
-func pressReturn(conn net.Conn) error {
-	fmt.Fprint(conn, "\r\n--- Press [ RETURN ]] ---")
-	// Wait for the user to press RETURN
-	scanner := bufio.NewScanner(conn)
-	scanner.Scan()
-	return nil
-}
-
-func pressKey(conn net.Conn) error {
-	fmt.Fprint(conn, "\r\n--- Press any key ---")
-	_, err := conn.Read(make([]byte, 1))
+func writeLine(conn *telnet.Connection, buffer []byte) error {
+	_, err := conn.Write(buffer)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func handleChatroom(conn net.Conn) {
-	ExitStatus = chatroom.MultiUserChat(conn, cuname, cutranslation, configpath)
-
-	if ExitStatus == "EXIT" {
-		return // Exit the program
-	}
-}
-
-// look at:
-/*
-if err := cmd.Run() ; err != nil {
-    if exitError, ok := err.(*exec.ExitError); ok {
-        return exitError.ExitCode()
-    }
-}
-*/
-
-// ALSO - look at setting up the io pipes
-func handleDoor(conn net.Conn, args string) {
-	cmd := exec.Command(modulepath+args, cuname)
-	err := cmd.Run()
-	if err != nil {
-		fmt.Println("Error running door: ", err)
-	}
-}
-
-func askYesNo(conn net.Conn, question string) (bool, error) {
-	var response string
-	fmt.Fprint(conn, question+" (y/n): ")
-	scanner := bufio.NewScanner(conn)
-	if scanner.Scan() {
-		response = scanner.Text()
+func toggleAnsi(conn *telnet.Connection) bool {
+	if hasAnsi {
+		hasAnsi = false
+		writeLine(conn, []byte("ANSI mode is OFF"))
+		return hasAnsi
 	} else {
-		return false, scanner.Err()
+		hasAnsi = true
+		writeLine(conn, []byte("ANSI mode is "+util.ANSI_BOLD+util.ANSI_BLUE_BG+util.ANSI_WHITE+"ON"+util.ANSI_RESET))
+		return hasAnsi
 	}
-	response = strings.ToLower(response)
+}
+
+func listUsers(conn *telnet.Connection) {
+	util.LockMaps()
+	defer util.UnlockMaps()
+	fmt.Println("Connections:")
+	for name, conn := range util.Connections {
+		fmt.Printf("%s : %v\n", name, conn)
+	}
+	fmt.Println("UserStatus:")
+	for name, status := range util.UserStatus {
+		fmt.Printf("%s : %v\n", name, status)
+	}
+}
+
+// call with:
+//
+//	answer, err := askYesNo(conn, "Are your sure?")
+//
+// if answer { this is code for yes }
+//
+// or
+//
+// if !answer { this is code for no }
+func askYesNo(conn *telnet.Connection, question string) (bool, error) {
+	var response string
+	writeLine(conn, []byte(question+" (y/n): "))
+	hotkey, err := readKey(conn)
+	if err != nil {
+		writeLine(conn, []byte(convertError(err)))
+	}
+	response = strings.ToLower(hotkey)
 	if response == "y" || response == "yes" {
 		return true, nil
 	} else if response == "n" || response == "no" {
@@ -502,170 +330,376 @@ func askYesNo(conn net.Conn, question string) (bool, error) {
 	}
 }
 
-func handleSelection(conn net.Conn, user User, args string, lvl int, currentMenu string) {
-	if lvl > user.Level {
-		fmt.Fprintf(conn, "\r\n")
-		fmt.Fprintf(conn, "Sorry, you don't have permission to access this feature.")
+func logout(conn *telnet.Connection) {
+	util.UserStatus[util.Cuname] = "logging out"
+	writeLine(conn, []byte("Goodbye!\r\n"))
+	conn.Close()
+}
+
+// pressKey function reads a single keypress and returns an err or nothing
+//
+// Call with:
+//
+// pressKey(*conn, "Press a key")
+func pressKey(conn *telnet.Connection, message string) error {
+	writeLine(conn, []byte("\r\n"+message))
+	_, err := conn.Read(make([]byte, 1))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+func newUser(conn *telnet.Connection, db *sql.DB) {
+	var attempts int = 0
+	var username string
+
+	for {
+		writeLine(conn, []byte("\r\nPlease choose a username: "))
+		username, _ = readLine(conn)
+		var id int
+		err := db.QueryRow("SELECT id FROM users WHERE username = ?", username).Scan(&id)
+		fmt.Println("error: ", err)
+		if err != sql.ErrNoRows {
+			attempts++
+			if attempts >= 3 {
+				writeLine(conn, []byte("\r\nToo many attempts. Please try again later.\r\n"))
+				logout(conn)
+				return
+			}
+
+			writeLine(conn, []byte("\r\nUsername already exists, please choose another: "))
+			continue
+		}
+		break
+	}
+	writeLine(conn, []byte("\r\nPassword: "))
+	passOne, _ := readLine(conn)
+	writeLine(conn, []byte("\r\nRe-enter Password: "))
+	passTwo, _ := readLine(conn)
+	if passOne != passTwo {
+		writeLine(conn, []byte("Passwords do not match. Please try again.\r\n"))
+		return
+	}
+
+	// You should hash the password and store the hashed password
+	hashedPassword, _ := hashPassword(passOne)
+	stmt, err := db.Prepare("INSERT INTO users(username,password,level,linefeeds,hotkeys,ansi, active, clearscreen) values(?,?,?,?,?,?,?,?)")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	_, err = stmt.Exec(username, hashedPassword, 0, 0, 0, 0, 1, 0)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	writeLine(conn, []byte("Thank you for registering "+username+".\r\n"))
+}
+
+func checkAttempts(conn *telnet.Connection, attempts int) {
+	if attempts >= 3 {
+		writeLine(conn, []byte("\r\nToo many attempts. Please try again later.\r\n"))
+		util.UserStatus[util.Cuname] = "too many attempts"
+		logout(conn)
+	}
+}
+
+func login(conn *telnet.Connection, db *sql.DB, TheUser map[string]CurrentUser) bool {
+	// check is prelogin is true, if so, print prelogin ascii message.
+	if prelogin {
+		showTextFile(conn, textfiles+"prelogin.txt")
+	}
+	// Check if ANSI is supported - set variable ansiSupported
+	ansiSupported := checkForANSI(conn)
+	if ansiSupported {
+		writeLine(conn, []byte("\r\n"+util.ANSI_BOLD+util.ANSI_BLUE_BG+util.ANSI_WHITE+"ANSI Supported"+util.ANSI_RESET+"\r\n"))
 	} else {
-		switch args {
-		case "info":
-			showTextFile(conn, asciipath+args+".asc", culinefeeds)
-			pressKey(conn)
-			getMenu(conn, user, currentMenu)
-		case "goodbye":
-			fmt.Fprintf(conn, "\r\n")
-			result, err := askYesNo(conn, "Are you sure you want to log out?")
+		writeLine(conn, []byte("\r\nASCII Mode\r\n"))
+	}
+
+	// reset login attempt counter to zero
+	var attempts int = 0
+	// this needs to be part of the username prompt - if new, type new, otherwise, use your username
+	answer, _ := askYesNo(conn, "Are you a new user? ")
+	if answer {
+		writeLine(conn, []byte("\r\n"))
+		newUser(conn, db)
+		return true
+	}
+
+	// get username, set string var username to the username. one more "username" :)
+	writeLine(conn, []byte("\r\n"))
+	writeLine(conn, []byte("Username: "))
+	var username string
+	getUsername, _ := readLine(conn)
+	username = strings.TrimSpace(getUsername)
+	if username == "" {
+		writeLine(conn, []byte("\r\nUsername cannot be blank."))
+		attempts++
+		checkAttempts(conn, attempts)
+		return login(conn, db, TheUser)
+	}
+	// get the users password - set var password to the password. one more "password" :)
+	writeLine(conn, []byte("\r\nPassword: "))
+	password, _ := readLine(conn)
+
+	// Check if the username exists in the database - populate the user struct with the users info
+	//set temp vars for the query
+	tUsername := ""
+	tId := 0
+	tPassword := ""
+
+	err := db.QueryRow("SELECT id, username, password from users WHERE username = ?", username).Scan(tId, tUsername, tPassword)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			attempts++
+			checkAttempts(conn, attempts)
+			writeLine(conn, []byte("\r\n"))
+			writeLine(conn, []byte("Incorrect username or password.\r\n"))
+			return false
+		}
+		fmt.Println(err)
+		return false
+	}
+	// Compare the plain text password with the hashed password stored in the database
+	err = bcrypt.CompareHashAndPassword([]byte(tPassword), []byte(strings.TrimSpace(password)))
+	if err != nil {
+		attempts++
+		checkAttempts(conn, attempts)
+		writeLine(conn, []byte("\r\n"))
+		writeLine(conn, []byte("Incorrect username or password.\r\n"))
+		return false
+	}
+	if alreadyLoggedIn(conn, username, db) {
+		writeLine(conn, []byte("\r\nThis account is already logged in. Please try again later.\r\n"))
+		return false
+	}
+
+	// go ahead and the the rest of the data, set the map.
+	tUsername = ""
+	tId = 0
+	tPassword = ""
+	tLevel := 0
+	tLinefeeds := 0
+	tHotkeys := 0
+	tActive := 0
+	tClearscreen := 0
+
+	err = db.QueryRow("SELECT id, username, password from users WHERE username = ?", username).Scan(tId, tUsername, tPassword, tLevel, tLinefeeds, tHotkeys, tActive, tClearscreen)
+	if err != nil {
+		fmt.Println("error getting user data", err)
+		return false
+	}
+	util.LockMaps()
+	currentuser := TheUser[username]
+	currentuser.username = username
+	currentuser.level = tLevel
+	currentuser.linefeeds = tLinefeeds
+	currentuser.hotkeys = tHotkeys
+	currentuser.active = tActive
+	currentuser.clearscreen = tClearscreen
+	currentuser.ansiSupported = ansiSupported
+	currentuser.hasAnsi = ansiSupported
+	currentuser.conn = conn
+	currentuser.userStatus = "logged in"
+	util.UnlockMaps()
+	writeLine(conn, []byte("\r\n"))
+	writeLine(conn, []byte("Welcome, \r\n"+util.Cuname))
+	return true
+}
+
+func alreadyLoggedIn(conn *telnet.Connection, username string, db *sql.DB) bool {
+
+	var sessionExists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions WHERE username = ? and active = 1)", username).Scan(&sessionExists)
+	if err != nil {
+		fmt.Println(err)
+		return false
+	}
+	if sessionExists {
+		writeLine(conn, []byte("You are already logged in. Would you like to end your previous session? (y/n): "))
+		buffer := make([]byte, 1)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Println(err)
+			return false
+		}
+		if n > 0 {
+			endSession := buffer[0]
+			if endSession == 'y' {
+				// end previous session
+				_, err := db.Exec("UPDATE sessions SET active = 0 WHERE username = ?", username)
+				if err != nil {
+					fmt.Println(err)
+					return false
+				}
+				return false
+			}
+		} else {
+			return true
+		}
+	}
+	return false
+}
+
+func menu(conn *telnet.Connection, db *sql.DB) {
+	for {
+		util.UpdateUserStatus(util.Cuname, "menu")
+		fmt.Fprint(conn, "\r\n[a]NSI ON/OFF\r\n")
+		fmt.Fprint(conn, "[w]ho is online\r\n")
+		fmt.Fprint(conn, "[i]nfo\r\n")
+		fmt.Fprint(conn, "[g]oodbye\r\n")
+		status := util.GetUserStatus(util.Cuname)
+		showprompt := util.ShowPrompt(status, menuprompt, hasAnsi)
+		fmt.Fprint(conn, showprompt)
+		text, err := readKey(conn)
+		if err != nil {
+			returnError := convertError(err)
+			fmt.Println("error reading input: ", returnError)
+			logout(conn)
+			return
+		}
+		switch text {
+		case "a":
+			hasAnsi = toggleAnsi(conn)
+		case "w":
+			listUsers(conn)
+		case "i":
+			showTextFile(conn, textfiles+"info.txt")
+		case "g":
+			answer, err := askYesNo(conn, "\r\nAre you sure you want to logout?")
 			if err != nil {
-				fmt.Fprintf(conn, "Error: %v", err)
+				returnError := convertError(err)
+				fmt.Println("error reading input: ", returnError)
+				logout(conn)
 				return
 			}
-			if result {
-				logout(conn, user)
+			if answer {
+				logout(conn)
+				return
 			} else {
-				getMenu(conn, user, currentMenu)
+				continue
 			}
-		case "bye":
-			logout(conn, user)
-		case "teleconference":
-			handleChatroom(conn)
-			getMenu(conn, user, currentMenu)
-		case "door":
-			handleDoor(conn, cuname)
-		case "userlist":
-			// code to handle userlist feature
-		case "obbs":
-			// code to handle obbs feature
-		case "whosonline":
-			// code to handle whosonline feature
-		case "pagesysop":
-			// code to handle pagesysop feature
-		case "userconfig":
-			// code to handle userconfig feature
-		case "sysop":
-			// code to handle sysop feature
 		default:
-			if args == "" {
-				getMenu(conn, user, currentMenu)
-				return
-			} else {
-				fmt.Fprintf(conn, "\r\nInvalid option selected")
-				pressKey(conn)
-				getMenu(conn, user, currentMenu)
-				return
-			}
+			fmt.Fprintln(conn, "\r\nInvalid option. Please try again.")
 		}
 	}
 }
 
-// Handle Connection and Main functions
-func handleConnection(conn net.Conn, db *sql.DB) (user User) {
-	username = ""
-	if prelogin {
-		showTextFile(conn, asciipath+"prelogin.asc", 1)
+// This is used to print a text file to the user
+// called with:
+//
+//     filePath := "./example.txt"
+//     err := showTextFile(conn, filePath)
+
+func showTextFile(conn *telnet.Connection, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
 	}
-	defer conn.Close()
-	if login(conn, db) {
-		getMenu(conn, user, "main")
-		logout(conn, user)
-		// end of testing
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	pageSize := 20 // number of lines to show per page
+	lineCount := 0 // current line count
+	for scanner.Scan() {
+		// word wrap text
+		words := strings.Split(scanner.Text(), " ")
+		var line string
+		for _, word := range words {
+			if len(line)+len(word) > 80 {
+				fmt.Fprintln(conn, line)
+				lineCount++
+				if lineCount%pageSize == 0 {
+					fmt.Fprint(conn, "\r\nPress any key to continue or 'q' to quit...\r\n")
+					text, _ := readKey(conn)
+					if text == "q" {
+						return nil
+					}
+					lineCount = 0
+				}
+				line = ""
+			}
+			line += word + " "
+		}
+		fmt.Fprintln(conn, line+"\r")
+		lineCount++
+		if lineCount%pageSize == 0 {
+			fmt.Fprint(conn, "\r\nPress any key to continue or 'q' to quit...\r\n")
+			text, _ := readKey(conn)
+			if text == "q" {
+				return nil
+			}
+			lineCount = 0
+		}
 	}
-	return
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func main() {
-	db, err := sql.Open("sqlite3", "./bbs.db")
+// check for ANSI negotiation
+func checkForANSI(conn *telnet.Connection) bool {
+	doesANSI, _ := askYesNo(conn, "Does your terminal support ANSI?  ")
+	return doesANSI
+}
+
+//
+// Three primary functions here: handleConnection, should only be called by func main(), checkDissconnectedUsers, and func main.
+//
+
+func handleConnection(conn *telnet.Connection, TheUser map[string]CurrentUser) {
+	// Open the database
+	db, err := sql.Open("sqlite3", datapath+"bbs.db")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	defer db.Close()
 
-	// Read Config File
-	var cfg Config
-	err = gcfg.ReadFileInto(&cfg, "bbs.config")
-	if err != nil {
-		fmt.Println("Failed to parse config file:", err)
-		return
-	}
+	sendline := []byte(welcomestring + "\r\nVersion " + TELEVISION_VERSION + "\r\n")
+	writeLine(conn, sendline)
+	login(conn, db, TheUser)
+	menu(conn, db)
+	util.LockMaps()
+	delete(util.Connections, util.Cuname)
+	delete(util.UserStatus, util.Cuname)
+	util.UnlockMaps()
+}
 
-	// set config values
-	port = strconv.Itoa(cfg.Mainconfig.Port)
-	bbsname = cfg.Mainconfig.Bbsname
-	sysopname = cfg.Mainconfig.Sysopname
-	prelogin = cfg.Mainconfig.Prelogin
-	showbulls = cfg.Mainconfig.Showbulls
-	newregistration = cfg.Mainconfig.Newregistration
-	defaultlevel = cfg.Mainconfig.Defaultlevel
-	configpath = cfg.Mainconfig.Configpath
-	stringsfile = cfg.Mainconfig.StringsFile
-
-	// Get strings values
-	var bbsStrings BbsStrings
-	err = gcfg.ReadFileInto(&bbsStrings, configpath+stringsfile)
-	if err != nil {
-		fmt.Println("Failed to parse strings file:", err)
-		return
-	}
-
-	// set strings values
-	menuprompt = bbsStrings.General.Menuprompt
-	welcomestring = bbsStrings.General.Welcomestring
-	pressanykey = bbsStrings.General.Pressanykey
-	pressreturn = bbsStrings.General.Pressreturn
-	entername = bbsStrings.General.Entername
-	enterpassword = bbsStrings.General.Enterpassword
-	enternewpassword = bbsStrings.General.Enternewpassword
-	enterpasswordagain = bbsStrings.General.Enterpasswordagain
-	areyounew = bbsStrings.General.Areyounew
-	areyousure = bbsStrings.General.Areyousure
-	ansimode = bbsStrings.General.Ansimode
-	asciimode = bbsStrings.General.Asciimode
-	invalidoption = bbsStrings.General.Invalidoption
-	invalidname = bbsStrings.General.Invalidname
-	invalidpassword = bbsStrings.General.Invalidpassword
-	passwordmismatch = bbsStrings.General.Passwordmismatch
-	userexists = bbsStrings.General.Userexists
-	usercreated = bbsStrings.General.Usercreated
-	enterchat = bbsStrings.General.Enterchat
-	leavechat = bbsStrings.General.Leavechat
-	pagesysop = bbsStrings.General.Pagesysop
-	ispagingyou = bbsStrings.General.Ispagingyou
-	sysopishere = bbsStrings.General.Sysopishere
-	sysopisaway = bbsStrings.General.Sysopisaway
-	sysopisbusy = bbsStrings.General.Sysopisbusy
-
-	// start the listener
-	listener, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer listener.Close()
-
-	fmt.Println("Television BBS v" + BBS_VERSION + "\r\n" + bbsname + " Listening on TCP port " + port + "\r\nSysOp: " + sysopname + "\r\nConfig File Path: " + configpath)
-	if newregistration {
-		fmt.Println("New User Registration is enabled.")
-	} else {
-		fmt.Println("New User Registration is disabled.")
-	}
-	if showbulls {
-		fmt.Println("Bulletins are enabled.")
-	} else {
-		fmt.Println("Bulletins are disabled.")
-	}
-	if prelogin {
-		fmt.Println("Prelogin is enabled.")
-	} else {
-		fmt.Println("Prelogin is disabled.")
-	}
-	fmt.Println("Default userlevel: ", defaultlevel)
-
+func checkDisconnectedClients() {
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println(err)
-			return
+		time.Sleep(5 * time.Second)
+		util.LockMaps()
+		for cuname, conn := range util.Connections {
+			if conn.RemoteAddr() == nil {
+				delete(util.Connections, cuname)
+				delete(util.UserStatus, cuname)
+			}
 		}
-		go handleConnection(conn, db)
+		util.UnlockMaps()
+	}
+}
+
+func main() {
+	getConfig()
+	getStrings()
+
+	// start the routine to check for disconnected clients
+	go checkDisconnectedClients()
+	svr := telnet.NewServer(listenaddr+":"+port, telnet.HandleFunc(func(conn *telnet.Connection) {
+		handleConnection(conn, TheUser)
+	}), options.NAWSOption)
+	err := svr.ListenAndServe()
+	if err != nil {
+		log.Fatalln("Error starting telnet server:", err)
 	}
 }
