@@ -1,4 +1,0 @@
- TEST ASCII FILE
- (Yeah.. its ASCII)
- 
-   -=>> TeleVision Bulletin Board System <<=-

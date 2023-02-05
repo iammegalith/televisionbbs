@@ -1,54 +1,42 @@
 package util
 
 import (
-	"net"
-	"time"
-	"unicode/utf8"
+	"fmt"
+	"math/rand"
+	"sync"
+
+	"github.com/PatrickRudolph/telnet"
 )
 
-// Structures
-type ActionConfig struct {
-    Actions map[string]string
+// User Database Structure
+type UserStruct struct {
+	Id          int64
+	Username    string
+	Password    string
+	Level       int
+	Linefeeds   int
+	Hotkeys     bool
+	Active      bool
+	Clearscreen bool
 }
 
-type Message struct {
-	ID       int
-	Basename string
-	Subject  string
-	Author   string
-	Date     string
-	Message  string
-	Postto   string
-}
-
-type FileArea struct {
-    ID           int
-    AreaName     string
-    Filename     string
-    Description  string
-    UploadedBy   string
-    Date         time.Time
-    Size         int64
-}
-
-type FileAreaInfo struct {
-    ID          int
-    AreaName    string
-    Description string
-}
-
-type File struct {
-    ID          int
-    AreaName    string
-    FileName    string
-    Description string
-    UploadedBy  string
-    Date        time.Time
-    Size        int
-}
 
 // Global Variables
-var LoggedInUsers = make(map[net.Conn]string)
+var Connections map[string]*telnet.Connection
+var Mutex sync.Mutex
+var UserStatus map[string]string
+
+var (
+	// User Database
+	User          UserStruct
+	Cuid          int64
+	Cuname        string
+	Culevel       int
+	Culinefeeds   int
+	Cuhotkeys     bool
+	Cuactive      bool
+	Cuclearscreen bool
+)
 
 const (
 	ANSI_RESET             = "\x1b[0m"
@@ -87,8 +75,46 @@ const (
 	CR_LF                  = "\r\n"
 )
 
-// Global Functions
-func TrimFirstChar(s string) string {
-	_, i := utf8.DecodeRuneInString(s)
-	return s[i:]
+func UpdateUserStatus(username, status string) {
+	Mutex.Lock()
+	UserStatus[Cuname] = status
+	Mutex.Unlock()
+}
+
+func GetUserStatus(username string) string {
+	Mutex.Lock()
+	status := UserStatus[Cuname]
+	Mutex.Unlock()
+	return status
+}
+
+func LockMaps() {
+	Mutex.Lock()
+}
+
+func UnlockMaps() {
+	Mutex.Unlock()
+}
+
+func GenRandomString(length int) string {
+	chars := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	result := make([]rune, length)
+	for i := range result {
+		result[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(result)
+}
+
+func ShowPrompt(status, menuprompt string, Cuansi bool) (showprompt string) {
+	LockMaps()
+	defer UnlockMaps()
+	fmt.Println("Cuansi: ", Cuansi)
+	if Cuansi {
+		fmt.Println("ANSI ENABLED")
+		showprompt := (ANSI_BOLD + ANSI_WHITE + status + ANSI_RESET + ":[" + ANSI_BOLD + ANSI_GREEN + menuprompt + ANSI_RESET + " ]: ")
+		return showprompt
+	} else {
+		showprompt := (status + ":[" + menuprompt + " ]: ")
+		return showprompt
+	}
 }

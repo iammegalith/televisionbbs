@@ -4,9 +4,9 @@ CREATE TABLE users (
     password TEXT NOT NULL,
     level INTEGER NOT NULL,
     linefeeds INTEGER NOT NULL,
-    translation INTEGER NOT NULL,
+    hotkeys INTEGER NOT NULL,
     active INTEGER NOT NULL,
-    clearscreen INTEGER NOT NULL,
+    clearscreen INTEGER NOT NULL
 );
 
 CREATE TABLE messages (
