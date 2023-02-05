@@ -1,5 +1,7 @@
 # What is a Bulletin Board System?
 
+Note to prevent pedantic antics: I worked on BBS code, ran bbs's, and requestly called them from about 1979 onward.  This description is for a new generation who may need some loose comparison.  That is all :)
+
 Before the internet, noone had smartphones, there were only a few large networked systems - but they cost too much to run, so the price was too high for the average person to use.
 
 some very clever computer hobbyists discovered that they could host "server" type systems on their home computer and allow others to connect and interact.
